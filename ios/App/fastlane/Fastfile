@@ -32,6 +32,7 @@ platform :ios do
     build_app(
       project: "App.xcodeproj",
       scheme: "App",
+      configuration: "Release",
       export_method: "app-store",
       xcargs: "-allowProvisioningUpdates -authenticationKeyPath #{key_path} -authenticationKeyID #{ENV['ASC_KEY_ID']} -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
     )
