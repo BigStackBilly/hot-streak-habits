@@ -45,8 +45,14 @@ platform :ios do
       lock_when_sleeps: false,
     )
 
+    # cert has its own separate keychain_path default (login.keychain-db)
+    # that does NOT automatically follow create_keychain's default_keychain
+    # setting — without this, the certificate gets created in the old
+    # unprotected keychain instead of the one we just set up, silently
+    # defeating the whole point of create_keychain above.
     cert(
       api_key: api_key,
+      keychain_path: File.expand_path("~/Library/Keychains/ci_build-db"),
       keychain_password: keychain_password,
     )
 
