@@ -1,11 +1,17 @@
 default_platform(:ios)
-require "base64"
 
 # Solo-developer setup: no Fastlane Match, no separate certificates repo.
-# Auth is via an App Store Connect API key (no Apple ID password needed),
-# and `-allowProvisioningUpdates` lets Xcode create/manage the signing
-# certificate and provisioning profile automatically during the build,
-# using that same API key's permissions (needs "Admin" access on the key).
+# Auth is via an App Store Connect API key (no Apple ID password needed).
+#
+# This explicitly fetches a distribution certificate (`cert`) and an
+# App Store-type provisioning profile (`sigh`, whose default `type` is
+# "appstore") up front, then builds with manual signing pointed at
+# exactly that profile. This replaced an earlier attempt using
+# `-allowProvisioningUpdates` for fully automatic signing, which kept
+# resolving to a Development-type profile during the archive step itself
+# (not just at export) — and Development profiles require at least one
+# registered test device, which a fresh account has none of. Asking for
+# an App Store profile explicitly sidesteps that ambiguous inference.
 platform :ios do
   desc "Build and upload a new build to TestFlight"
   lane :beta do
@@ -16,25 +22,26 @@ platform :ios do
       is_key_content_base64: true,
     )
 
-    update_code_signing_settings(
-      use_automatic_signing: true,
-      path: "App.xcodeproj",
-      team_id: ENV["APPLE_TEAM_ID"],
+    cert(api_key: api_key)
+
+    sigh(
+      api_key: api_key,
+      app_identifier: "com.niloc.hotstreakhabits",
     )
 
-    # `-allowProvisioningUpdates` authenticates via xcodebuild's own API-key
-    # flags, which need the key as an actual file on disk — the in-memory
-    # `api_key` object above is only usable by Fastlane actions themselves
-    # (like upload_to_testflight below), not raw xcodebuild flags.
-    key_path = File.expand_path("AuthKey.p8")
-    File.write(key_path, Base64.decode64(ENV["ASC_KEY_CONTENT"]))
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "App.xcodeproj",
+      code_sign_identity: "Apple Distribution",
+      profile_name: lane_context[SharedValues::SIGH_PROFILE_NAME],
+      team_id: ENV["APPLE_TEAM_ID"],
+    )
 
     build_app(
       project: "App.xcodeproj",
       scheme: "App",
       configuration: "Release",
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates -authenticationKeyPath #{key_path} -authenticationKeyID #{ENV['ASC_KEY_ID']} -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
     )
 
     upload_to_testflight(
