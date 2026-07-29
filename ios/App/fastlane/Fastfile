@@ -22,7 +22,7 @@ platform :ios do
     )
 
     build_app(
-      workspace: "App.xcworkspace",
+      project: "App.xcodeproj",
       scheme: "App",
       export_method: "app-store",
       xcargs: "-allowProvisioningUpdates",
