@@ -1,4 +1,5 @@
 default_platform(:ios)
+require "base64"
 
 # Solo-developer setup: no Fastlane Match, no separate certificates repo.
 # Auth is via an App Store Connect API key (no Apple ID password needed),
@@ -21,12 +22,18 @@ platform :ios do
       team_id: ENV["APPLE_TEAM_ID"],
     )
 
+    # `-allowProvisioningUpdates` authenticates via xcodebuild's own API-key
+    # flags, which need the key as an actual file on disk — the in-memory
+    # `api_key` object above is only usable by Fastlane actions themselves
+    # (like upload_to_testflight below), not raw xcodebuild flags.
+    key_path = File.expand_path("AuthKey.p8")
+    File.write(key_path, Base64.decode64(ENV["ASC_KEY_CONTENT"]))
+
     build_app(
       project: "App.xcodeproj",
       scheme: "App",
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates",
-      api_key: api_key,
+      xcargs: "-allowProvisioningUpdates -authenticationKeyPath #{key_path} -authenticationKeyID #{ENV['ASC_KEY_ID']} -authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
     )
 
     upload_to_testflight(
