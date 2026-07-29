@@ -31,15 +31,11 @@ platform :ios do
       app_identifier: app_identifier,
     )
 
-    # sigh doesn't expose the profile's human-readable name via
-    # SharedValues (only SIGH_PROFILE_PATH/SIGH_UDID) — it's only
-    # available via this specially-formatted env var it sets, keyed off
-    # the same app_identifier used above so it can't drift out of sync.
     update_code_signing_settings(
       use_automatic_signing: false,
       path: "App.xcodeproj",
       code_sign_identity: "Apple Distribution",
-      profile_name: ENV["sigh_#{app_identifier}_appstore_profile-name"],
+      profile_name: lane_context[SharedValues::SIGH_NAME],
       team_id: ENV["APPLE_TEAM_ID"],
     )
 
