@@ -26,6 +26,7 @@ platform :ios do
       scheme: "App",
       export_method: "app-store",
       xcargs: "-allowProvisioningUpdates",
+      api_key: api_key,
     )
 
     upload_to_testflight(
