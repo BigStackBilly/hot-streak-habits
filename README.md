@@ -334,17 +334,40 @@ upload:
   password — generate this once under App Store Connect → Users and Access
   → Integrations → App Store Connect API, with **Admin** access so the key
   can manage signing.
-- Passes `-allowProvisioningUpdates` to `xcodebuild`, which lets Xcode
-  create/renew the signing certificate and provisioning profile on its own
-  during the build using that API key, instead of a human clicking through
-  Xcode's signing UI.
+- Explicitly fetches a Distribution certificate (`cert`) and an App
+  Store-type provisioning profile (`sigh`), then builds with manual
+  signing pointed at exactly that profile. An earlier attempt used
+  `-allowProvisioningUpdates` for fully automatic signing, but that kept
+  resolving to a Development-type profile during the archive step itself
+  (which needs a registered test device, and a fresh account has none) —
+  asking for an App Store profile explicitly sidesteps that.
+- Runs inside a dedicated CI keychain with a known password (set via
+  `create_keychain`/raw `security` calls), not the runner's default
+  keychain — the default has no password, so `codesign` can't get
+  non-interactive access to the certificate's private key and instead
+  tries to show a GUI permission prompt that hangs forever with nobody
+  there to click it.
+- **That keychain is cached across runs** (`actions/cache`, keyed
+  statically so the same one always gets restored) so a fresh
+  certificate never needs to be created — and Apple's certificate quota
+  never gets hit — on every single build. `cert`'s own default behavior
+  detects and reuses the certificate already inside the restored
+  keychain instead of minting a new one.
+- **Build number increments automatically** (`latest_testflight_build_number`
+  + `increment_build_number`) by asking App Store Connect what the last
+  uploaded build was, rather than relying on a hardcoded number a human
+  would need to remember to bump before every future update — Apple
+  rejects any upload that doesn't have a higher build number than the
+  last one.
 - Uploads the resulting build straight to TestFlight.
 
-Four GitHub Actions secrets feed this: `ASC_KEY_ID`, `ASC_ISSUER_ID`,
-`ASC_KEY_CONTENT` (the base64'd `.p8`), and `APPLE_TEAM_ID` (from Apple
-Developer → Membership Details). The `.p8` file can only be downloaded
-once from Apple, so save it somewhere safe outside this repo — it's never
-committed, only stored as an encrypted secret.
+Five GitHub Actions secrets feed this: `ASC_KEY_ID`, `ASC_ISSUER_ID`,
+`ASC_KEY_CONTENT` (the base64'd `.p8`), `APPLE_TEAM_ID` (from Apple
+Developer → Membership Details), and `CI_KEYCHAIN_PASSWORD` (an arbitrary
+password for the cached CI keychain — stable across runs on purpose, so a
+restored cache can still be unlocked with it). The `.p8` file can only be
+downloaded once from Apple, so save it somewhere safe outside this repo —
+it's never committed, only stored as an encrypted secret.
 
 ## Extending it
 
