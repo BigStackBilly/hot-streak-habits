@@ -28,6 +28,17 @@ jobs:
           bundler-cache: true
           working-directory: ios/App
 
+      # Persists the signing certificate + private key across runs, so a
+      # fresh Distribution certificate never needs to be created (and
+      # Apple's certificate quota never gets hit) on every single build.
+      # Static key on purpose — we always want the same cached keychain
+      # restored, not one that varies by commit/file hash.
+      - name: Cache CI keychain
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Keychains/ci_build-db
+          key: ios-ci-keychain-v1
+
       - name: Build and upload to TestFlight
         working-directory: ios/App
         env:
@@ -35,4 +46,5 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CI_KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
         run: bundle exec fastlane beta

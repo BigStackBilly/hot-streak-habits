@@ -1,5 +1,4 @@
 default_platform(:ios)
-require "securerandom"
 
 # Solo-developer setup: no Fastlane Match, no separate certificates repo.
 # Auth is via an App Store Connect API key (no Apple ID password needed).
@@ -17,7 +16,11 @@ platform :ios do
   desc "Build and upload a new build to TestFlight"
   lane :beta do
     app_identifier = "com.Niloc.hotstreakhabits"
-    keychain_password = SecureRandom.hex(16)
+    keychain_path = File.expand_path("~/Library/Keychains/ci_build-db")
+    # Stable across runs (a GitHub secret, not randomly generated per run)
+    # so a keychain restored from cache (see the workflow's "Cache CI
+    # keychain" step) can actually still be unlocked with it.
+    keychain_password = ENV["CI_KEYCHAIN_PASSWORD"]
 
     api_key = app_store_connect_api_key(
       key_id: ENV["ASC_KEY_ID"],
@@ -30,29 +33,46 @@ platform :ios do
     # set, so when codesign later needs to actually use the certificate's
     # private key, macOS tries to show an interactive "Allow/Deny"
     # permission dialog — which hangs forever with nobody there to click
-    # it (this is exactly what happened on the previous run: it froze at
-    # "Signing Cordova.framework", the first real codesign operation, for
-    # 15+ minutes). A dedicated keychain with a known password lets the
+    # it (this happened on an earlier run: froze at "Signing
+    # Cordova.framework", the first real codesign operation, for 15+
+    # minutes). A dedicated keychain with a known password lets the
     # partition-list ACL be set correctly so signing can proceed
-    # non-interactively. The password only needs to be valid for this one
-    # ephemeral run — the keychain is destroyed with the runner afterward.
-    create_keychain(
-      name: "ci_build",
-      password: keychain_password,
-      default_keychain: true,
-      unlock: true,
-      timeout: 3600,
-      lock_when_sleeps: false,
-    )
+    # non-interactively.
+    #
+    # If the cache step in the workflow already restored a keychain from
+    # a previous run (with a still-valid certificate inside it), we only
+    # need to unlock and re-register it — calling create_keychain again
+    # would error ("already exists") and, worse, would defeat the whole
+    # point of caching by starting empty. Only create fresh if there's
+    # truly nothing there yet.
+    if File.exist?(keychain_path)
+      sh("security unlock-keychain -p '#{keychain_password}' '#{keychain_path}'")
+      sh("security set-keychain-settings -t 3600 -u '#{keychain_path}'")
+      sh("security list-keychains -d user -s '#{keychain_path}' ~/Library/Keychains/login.keychain-db")
+      sh("security default-keychain -d user -s '#{keychain_path}'")
+    else
+      create_keychain(
+        name: "ci_build",
+        password: keychain_password,
+        default_keychain: true,
+        unlock: true,
+        timeout: 3600,
+        lock_when_sleeps: false,
+      )
+    end
 
     # cert has its own separate keychain_path default (login.keychain-db)
     # that does NOT automatically follow create_keychain's default_keychain
     # setting — without this, the certificate gets created in the old
     # unprotected keychain instead of the one we just set up, silently
-    # defeating the whole point of create_keychain above.
+    # defeating the whole point of create_keychain above. When the cache
+    # already has a valid certificate for this account, cert's own
+    # default behavior (force: false) detects and reuses it instead of
+    # creating a new one — which is what actually stops every run from
+    # burning through Apple's certificate quota.
     cert(
       api_key: api_key,
-      keychain_path: File.expand_path("~/Library/Keychains/ci_build-db"),
+      keychain_path: keychain_path,
       keychain_password: keychain_password,
     )
 
@@ -60,6 +80,14 @@ platform :ios do
       api_key: api_key,
       app_identifier: app_identifier,
     )
+
+    # Apple rejects any TestFlight upload that doesn't have a higher
+    # build number than the last one for this app. Rather than a human
+    # remembering to bump a hardcoded number before every future update,
+    # ask App Store Connect what the last uploaded build number actually
+    # was and increment from there automatically.
+    last_build = latest_testflight_build_number(api_key: api_key, app_identifier: app_identifier)
+    increment_build_number(build_number: last_build + 1, xcodeproj: "App.xcodeproj")
 
     update_code_signing_settings(
       use_automatic_signing: false,
