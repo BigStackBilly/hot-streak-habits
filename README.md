@@ -319,6 +319,33 @@ Building iOS needs Xcode, which only runs on macOS — see the "GitHub
 Actions + Fastlane" plan discussed for building/signing iOS without owning
 a Mac.
 
+## Building for the App Store without owning a Mac
+
+Xcode (needed to build/sign an iOS app) only runs on macOS. Rather than
+buying a Mac, `.github/workflows/ios-testflight.yml` uses GitHub's free
+hosted macOS runners to do the build in the cloud, triggered manually from
+the Actions tab (not on every push — each run costs real CI minutes).
+
+`ios/App/fastlane/Fastfile` (a solo-developer setup, deliberately without
+Fastlane Match or a separate certificates repo) does the actual build and
+upload:
+- Authenticates to App Store Connect via an **API key** (Key ID + Issuer ID
+  + the key's `.p8` file content, base64-encoded) instead of an Apple ID
+  password — generate this once under App Store Connect → Users and Access
+  → Integrations → App Store Connect API, with **Admin** access so the key
+  can manage signing.
+- Passes `-allowProvisioningUpdates` to `xcodebuild`, which lets Xcode
+  create/renew the signing certificate and provisioning profile on its own
+  during the build using that API key, instead of a human clicking through
+  Xcode's signing UI.
+- Uploads the resulting build straight to TestFlight.
+
+Four GitHub Actions secrets feed this: `ASC_KEY_ID`, `ASC_ISSUER_ID`,
+`ASC_KEY_CONTENT` (the base64'd `.p8`), and `APPLE_TEAM_ID` (from Apple
+Developer → Membership Details). The `.p8` file can only be downloaded
+once from Apple, so save it somewhere safe outside this repo — it's never
+committed, only stored as an encrypted secret.
+
 ## Extending it
 
 A few natural next steps, roughly in order of effort:

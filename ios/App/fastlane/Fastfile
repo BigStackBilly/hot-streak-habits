@@ -1,0 +1,36 @@
+default_platform(:ios)
+
+# Solo-developer setup: no Fastlane Match, no separate certificates repo.
+# Auth is via an App Store Connect API key (no Apple ID password needed),
+# and `-allowProvisioningUpdates` lets Xcode create/manage the signing
+# certificate and provisioning profile automatically during the build,
+# using that same API key's permissions (needs "Admin" access on the key).
+platform :ios do
+  desc "Build and upload a new build to TestFlight"
+  lane :beta do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+
+    update_code_signing_settings(
+      use_automatic_signing: true,
+      path: "App.xcodeproj",
+      team_id: ENV["APPLE_TEAM_ID"],
+    )
+
+    build_app(
+      workspace: "App.xcworkspace",
+      scheme: "App",
+      export_method: "app-store",
+      xcargs: "-allowProvisioningUpdates",
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true,
+    )
+  end
+end
