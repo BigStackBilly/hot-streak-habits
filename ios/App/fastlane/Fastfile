@@ -22,17 +22,6 @@ platform :ios do
       is_key_content_base64: true,
     )
 
-    # sigh couldn't find a Developer Portal App ID for this bundle ID even
-    # though it was registered manually earlier — produce is idempotent
-    # (safe if it already exists) and guarantees it's there via the same
-    # API the rest of this lane uses, ruling out any portal-vs-API-key
-    # visibility mismatch.
-    produce(
-      api_key: api_key,
-      app_identifier: "com.niloc.hotstreakhabits",
-      skip_itc: true,
-    )
-
     cert(api_key: api_key)
 
     sigh(
