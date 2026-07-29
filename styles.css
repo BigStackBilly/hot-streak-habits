@@ -1,0 +1,825 @@
+/* ===================================================================
+   STREAKS — visual identity
+   Warm "ember" palette: cream/charcoal surfaces + an orange-to-gold
+   flame gradient reserved ONLY for streak numbers and the active/lit
+   state of a habit. That scarcity is what makes it feel earned.
+   =================================================================== */
+
+:root {
+  --bg: #fff8f0;
+  --surface: #ffffff;
+  --surface-2: #fff1e4;
+  --text: #241c17;
+  --text-dim: #8a7b70;
+  --border: #f0e2d4;
+  --shadow: 0 2px 10px rgba(120, 72, 32, 0.08);
+
+  --ember-1: #ff5a36;
+  --ember-2: #ffc145;
+  --ember-gradient: linear-gradient(135deg, var(--ember-1), var(--ember-2));
+  --mint: #2ec4b6;
+  --danger: #e63946;
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+}
+
+[data-theme="dark"] {
+  --bg: #18120e;
+  --surface: #241b15;
+  --surface-2: #2c211a;
+  --text: #fbf1e8;
+  --text-dim: #b5a495;
+  --border: #3a2c22;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* Cosmetic theme packs (see THEME_PACKS in index.html) — each just swaps
+   the ember gradient stops, so every ".lit" state, streak number, FAB,
+   and milestone banner re-colors for free. */
+[data-pack="blue"] { --ember-1: #2f6bff; --ember-2: #7ee8fa; }
+[data-pack="neon"] { --ember-1: #ff2e88; --ember-2: #7b2ff7; }
+[data-pack="emerald"] { --ember-1: #14b8a6; --ember-2: #a3e635; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 28px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-title .flame {
+  filter: drop-shadow(0 2px 4px rgba(255, 90, 54, 0.4));
+  display: inline-flex;
+}
+
+/* Owned/active PAID theme packs recolor the actual 🔥 emoji via hue-rotate
+   instead of swapping in custom artwork. Emoji glyphs are fixed-color
+   bitmaps — `color` can't touch them — but `filter` operates on the
+   rendered pixels regardless of source, so the shape stays perfectly
+   legible at this size no matter the hue shift. The free Ember pack is
+   untouched, so there's zero regression risk to the default look. Applies
+   to both the header logo and the big empty-state flame. */
+.app-title .flame.pack-blue, .empty-state .emoji.pack-blue { filter: hue-rotate(195deg) saturate(1.4) drop-shadow(0 2px 4px rgba(47, 107, 255, 0.4)); }
+.app-title .flame.pack-neon, .empty-state .emoji.pack-neon { filter: hue-rotate(275deg) saturate(1.5) drop-shadow(0 2px 4px rgba(255, 46, 136, 0.4)); }
+.app-title .flame.pack-emerald, .empty-state .emoji.pack-emerald { filter: hue-rotate(110deg) saturate(1.3) drop-shadow(0 2px 4px rgba(20, 184, 166, 0.4)); }
+
+.flame-emoji-animated {
+  display: inline-block;
+  animation: flame-flicker 2.2s ease-in-out infinite;
+}
+
+@keyframes flame-flicker {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  25% { transform: scale(1.08) rotate(-4deg); }
+  50% { transform: scale(0.94) rotate(3deg); }
+  75% { transform: scale(1.04) rotate(-2deg); }
+}
+
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* Unread-style badge on the theme-shop icon — clears permanently the
+   first time the shop is opened (cosmetics.shopViewed), regardless of
+   whether anything was bought. Pure discovery nudge, not a purchase gate. */
+.unread-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--surface);
+}
+
+/* ---------- Empty state ---------- */
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 32px;
+  gap: 10px;
+}
+
+.empty-state .emoji {
+  font-size: 56px;
+  margin-bottom: 6px;
+}
+
+.empty-state h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 22px;
+  margin: 0;
+}
+
+.empty-state p {
+  color: var(--text-dim);
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* .btn normally lives in a flex ROW (.modal-buttons) where flex:1 is what
+   we want. The empty-state button sits in a flex COLUMN instead, so that
+   same flex:1 would stretch it to fill all remaining vertical space. */
+.empty-state .btn-primary {
+  flex: none;
+}
+
+/* ---------- Habit list ---------- */
+
+.habit-list {
+  flex: 1;
+  padding: 8px 16px 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.habit-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  transition: transform 0.15s ease;
+}
+
+.habit-card.just-completed {
+  animation: card-pop 0.3s ease;
+}
+
+@keyframes card-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+.habit-top-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The main tap target: tapping anywhere on the emoji+name+streak area
+   marks today done. Minimum 44px tall per mobile tap-target guidelines. */
+.habit-tap-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  text-align: left;
+  padding: 4px 0;
+}
+
+.habit-emoji-ring {
+  width: 50px;
+  height: 50px;
+  min-width: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.25s ease, border-color 0.25s ease;
+}
+
+.habit-emoji-ring.lit {
+  background: var(--ember-gradient);
+  border-color: transparent;
+  box-shadow: 0 4px 14px rgba(255, 90, 54, 0.45);
+}
+
+.habit-emoji-ring.just-lit {
+  animation: ignite 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes ignite {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.3) rotate(-8deg); }
+  70% { transform: scale(0.95) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+.habit-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.habit-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.habit-name {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.interval-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 15%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.habit-streak-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.due-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ember-1);
+  background: color-mix(in srgb, var(--ember-1) 14%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  animation: due-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes due-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.habit-streak-num {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 20px;
+  background: var(--ember-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  transition: transform 0.2s ease;
+}
+
+.habit-streak-num.bump {
+  animation: bump 0.35s ease;
+}
+
+@keyframes bump {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+.habit-streak-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.habit-longest {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.habit-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.icon-btn:active {
+  background: var(--surface-2);
+}
+
+/* ---------- Week dots ---------- */
+
+.week-row {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 30px;
+}
+
+.week-day-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.week-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.week-dot.hit {
+  background: var(--ember-gradient);
+  border-color: transparent;
+  color: white;
+}
+
+/* Due today, not done yet — still on time, just needs attention. */
+.week-dot.due {
+  border-color: var(--ember-1);
+  color: var(--ember-1);
+  font-weight: 800;
+  animation: due-pulse 1.6s ease-in-out infinite;
+}
+
+/* A due date that passed with nothing logged — this is what broke the streak. */
+.week-dot.missed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.week-dot.today {
+  box-shadow: 0 0 0 2px var(--mint);
+}
+
+/* ---------- Floating add button ---------- */
+
+.fab {
+  position: fixed;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.fab button {
+  pointer-events: auto;
+  background: var(--ember-gradient);
+  color: white;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 15px 26px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(255, 90, 54, 0.4);
+  min-height: 48px;
+}
+
+.fab button:active {
+  transform: scale(0.96);
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 12, 6, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg);
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 16px;
+}
+
+.reflection-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 4px 0 20px;
+}
+
+.reflection-emoji {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: var(--surface-2);
+  border: 2px solid var(--danger);
+  filter: grayscale(0.4);
+}
+
+.reflection-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 19px;
+  margin: 0 0 4px;
+  color: var(--danger);
+}
+
+.reflection-subtitle {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.field-optional {
+  font-weight: 400;
+  text-transform: none;
+}
+
+.reason-quote {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.reason-input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.4;
+  min-height: 76px;
+  resize: vertical;
+  margin-bottom: 18px;
+}
+
+.reason-input:focus {
+  outline: none;
+  border-color: var(--ember-1);
+}
+
+.name-input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  margin-bottom: 18px;
+}
+
+.name-input:focus {
+  outline: none;
+  border-color: var(--ember-1);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.emoji-option {
+  aspect-ratio: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emoji-option.selected {
+  background: var(--ember-gradient);
+  border-color: transparent;
+  transform: scale(1.05);
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+}
+
+.theme-option.selected {
+  border-color: var(--ember-1);
+}
+
+.theme-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.theme-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.theme-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 4px 0 18px;
+}
+
+.interval-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.interval-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  outline: none;
+}
+
+.interval-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--ember-gradient);
+  box-shadow: 0 2px 8px rgba(255, 90, 54, 0.4);
+  cursor: pointer;
+}
+
+.interval-slider::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ember-gradient);
+  box-shadow: 0 2px 8px rgba(255, 90, 54, 0.4);
+  cursor: pointer;
+}
+
+.interval-slider-value {
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 92px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-buttons-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-buttons-column .btn {
+  line-height: 1.3;
+  padding: 12px 16px;
+}
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--ember-gradient);
+  color: white;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-danger {
+  background: none;
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 14px;
+  min-height: 44px;
+}
+
+/* ---------- Milestone celebration ---------- */
+
+.milestone-banner {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ember-gradient);
+  color: white;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(255, 90, 54, 0.45);
+  z-index: 50;
+  animation: banner-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+
+@keyframes banner-in {
+  from { transform: translate(-50%, -20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.reminder-banner {
+  background: var(--mint);
+  box-shadow: 0 8px 24px rgba(46, 196, 182, 0.45);
+}
+
+.confetti-piece {
+  position: fixed;
+  top: -10px;
+  width: 8px;
+  height: 14px;
+  z-index: 49;
+  pointer-events: none;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translateY(110vh) rotate(600deg);
+    opacity: 0.9;
+  }
+}

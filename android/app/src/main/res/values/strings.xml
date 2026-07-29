@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hot Streak Habits</string>
+    <string name="title_activity_main">Hot Streak Habits</string>
+    <string name="package_name">com.niloc.hotstreakhabits</string>
+    <string name="custom_url_scheme">com.niloc.hotstreakhabits</string>
+</resources>

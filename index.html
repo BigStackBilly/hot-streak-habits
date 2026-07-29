@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Hot Streak Habits</title>
+<meta name="theme-color" content="#FF5A36" />
+
+<!-- Fonts: Baloo 2 for big chunky streak numbers/headings, Inter for body text -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Hot Streak" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX in app.js directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// STREAKS — a small local-first habit tracker
+//
+// This lives inline in index.html (rather than a separate app.js) so the
+// app can be opened directly as a file:// URL with zero server/build step
+// — the in-browser Babel transformer can't fetch a separate local script
+// file over file://, but it can transform a script that's already inline.
+// If you later add a real build step (Vite, etc.) this is the file you'd
+// split into components/, hooks/, and utils/.
+//
+// Organized top to bottom as:
+//   1. Date helpers        - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Streak math          - pure functions, no React, easy to test by hand
+//   3. localStorage helpers - load/save the habit list
+//   4. Small presentational components (EmptyState, WeekDots, Confetti...)
+//   5. HabitCard             - one habit's row in the list
+//   6. AddEditModal          - the bottom-sheet form for creating/editing
+//   7. App                   - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect } = React;
+
+const STORAGE_KEY = "streaks.habits.v1";
+const THEME_KEY = "streaks.theme.v1";
+const NOTIF_KEY = "streaks.notifsEnabled.v1";
+const NOTIFIED_TODAY_KEY = "streaks.notifiedToday.v1";
+const COSMETICS_KEY = "streaks.cosmetics.v1";
+const MILESTONES = [7, 30, 100];
+const THEME_UNLOCK_STREAK = 10;
+
+const EMOJI_CHOICES = [
+  "💧", "🏃", "💪", "📚", "🧘", "🥗",
+  "🚭", "🛌", "🎯", "💰", "🎨", "🧹",
+  "🐶", "🚿", "✍️", "🌅", "🍎", "☀️",
+  "🎵", "🧠", "❤️", "🚴", "🦷", "📵",
+  "🎸",
+];
+
+// Cosmetic flame-color packs. "ember" is the free default; the rest are
+// paid re-skins of the same --ember-1/--ember-2 gradient variables (see
+// styles.css [data-pack="..."] rules) — no logic changes, just color.
+const THEME_PACKS = [
+  { id: "ember", name: "Ember", free: true, colors: ["#ff5a36", "#ffc145"] },
+  { id: "blue", name: "Blue flame", price: "$1.99", colors: ["#2f6bff", "#7ee8fa"] },
+  { id: "neon", name: "Neon pulse", price: "$1.99", colors: ["#ff2e88", "#7b2ff7"] },
+  { id: "emerald", name: "Emerald ember", price: "$1.99", colors: ["#14b8a6", "#a3e635"] },
+];
+
+// A "plan" is just how many days apart check-ins need to be. 1 = every day.
+// Shown on a continuous 1-7 day slider rather than fixed presets, so any
+// spacing from daily to weekly is selectable.
+function intervalLabel(days) {
+  if (days === 1) return "Daily";
+  if (days === 7) return "Weekly";
+  return `Every ${days} days`;
+}
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// We store each completed day as a "YYYY-MM-DD" string in the user's
+// LOCAL timezone. We deliberately do NOT use `date.toISOString()`
+// anywhere here, because toISOString() converts to UTC first — for
+// anyone west of Greenwich, checking off a habit at 9pm can silently
+// get recorded as "tomorrow". Building the string manually from
+// getFullYear/getMonth/getDate keeps it anchored to the user's actual
+// calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date, delta) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + delta);
+  return copy;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Add `delta` days to a "YYYY-MM-DD" key and return a new key. Goes via a
+// local Date built from the individual Y/M/D numbers (not `new Date(key)`,
+// which parses as UTC midnight and can land on the wrong local day) so this
+// stays consistent with toDateKey().
+function keyPlusDays(key, delta) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + delta);
+  return toDateKey(date);
+}
+
+// Number of days from keyA to keyB (positive if keyB is later).
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+// ---------------------------------------------------------------------
+// 2. STREAK MATH
+//
+// A habit's "completedDates" is just an array of date-key strings.
+// Everything else (current streak, longest streak, this week's dots)
+// is *derived* from that array every render instead of being stored.
+// That's a deliberate simplification: there's only one source of
+// truth, so the streak number can never drift out of sync with the
+// actual checked-off days.
+// ---------------------------------------------------------------------
+
+// Every habit has an `intervalDays` "plan" (1 = every day, 2 = every other
+// day, etc). A streak survives skipped days *inside* the interval, but
+// breaks once a check-in is more than `intervalDays` overdue.
+//
+// Example: intervalDays = 2, last check-in Monday.
+//   - Tuesday: due date (Mon + 2) is Wednesday, so Tuesday is a free skip day.
+//   - Wednesday: still the due date itself — there's time left today, streak
+//     still alive.
+//   - Thursday: the due date has passed with nothing logged -> streak is 0.
+function getCurrentStreak(completedDates, intervalDays) {
+  if (completedDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(completedDates)].sort();
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const daysSinceLast = daysBetween(lastKey, todayKey());
+
+  // More than `intervalDays` have gone by since the last check-in with
+  // nothing logged in between -> the due date has already passed.
+  if (daysSinceLast > intervalDays) return 0;
+
+  // Walk backwards through check-ins, counting how many in a row are each
+  // within `intervalDays` of the next one. A bigger gap means a due date
+  // was missed somewhere in the chain, which ends the run right there.
+  let streak = 1;
+  for (let i = sortedKeys.length - 1; i > 0; i--) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    if (gap > intervalDays) break;
+    streak++;
+  }
+  return streak;
+}
+
+// Longest run of on-time check-ins ever, from the full history. Same
+// "gap <= intervalDays" rule as the current streak, just scanning forward
+// through the whole history instead of stopping at the first break.
+function getLongestStreak(completedDates, intervalDays) {
+  if (completedDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(completedDates)].sort();
+  let longest = 1;
+  let run = 1;
+
+  for (let i = 1; i < sortedKeys.length; i++) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    run = gap <= intervalDays ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+
+  return longest;
+}
+
+// When is this habit next due, and is today the day (or already overdue)?
+// Used for the "due today" badge, the week dots, and the reminder buzzer.
+function getDueInfo(habit) {
+  const intervalDays = habit.intervalDays || 1;
+  const todayK = todayKey();
+  const sortedKeys = [...new Set(habit.completedDates)].sort();
+
+  if (sortedKeys.length === 0) {
+    return { dueKey: todayK, isDoneToday: false, isDueToday: true, isOverdue: false };
+  }
+
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const dueKey = keyPlusDays(lastKey, intervalDays);
+  const isDoneToday = sortedKeys.includes(todayK);
+  const gap = daysBetween(dueKey, todayK); // today - due, in days
+
+  return {
+    dueKey,
+    isDoneToday,
+    isDueToday: !isDoneToday && gap === 0,
+    isOverdue: !isDoneToday && gap > 0,
+  };
+}
+
+// Last 7 days (oldest -> newest, today last) as
+// {key, label, isToday, status}, where status is one of:
+//   "hit"     - checked off that day
+//   "due"     - today, not done yet (whether still on time or already
+//               overdue — either way, today is the day to act)
+//   "missed"  - a past due date that passed with nothing logged
+//   "neutral" - a free skip day inside the interval, nothing to show
+//
+// Today's status is derived from getDueInfo() rather than recomputed here,
+// so this can never disagree with the "due today" badge shown on the card.
+function getWeekData(habit) {
+  const intervalDays = habit.intervalDays || 1;
+  const dateSet = new Set(habit.completedDates);
+  const sortedKeys = [...dateSet].sort();
+  const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
+  const todayK = todayKey();
+  const due = getDueInfo(habit);
+  const days = [];
+
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = addDays(new Date(), -offset);
+    const key = toDateKey(d);
+    let status = "neutral";
+
+    if (dateSet.has(key)) {
+      status = "hit";
+    } else if (key === todayK) {
+      status = due.isDueToday || due.isOverdue ? "due" : "neutral";
+    } else {
+      const priorKey = [...sortedKeys].reverse().find((k) => k < key);
+      if (priorKey && key >= keyPlusDays(priorKey, intervalDays)) {
+        status = "missed";
+      }
+    }
+
+    days.push({ key, label: dayLabels[d.getDay()], status, isToday: key === todayK });
+  }
+  return days;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadHabits() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHabits(habits) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(habits));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadNotifsEnabled() {
+  return localStorage.getItem(NOTIF_KEY) === "1";
+}
+
+// Tracks the last date (per habit) we already buzzed for, so reopening the
+// app or a periodic recheck doesn't re-buzz you every few minutes.
+function loadNotifiedMap() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTIFIED_TODAY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNotifiedMap(map) {
+  localStorage.setItem(NOTIFIED_TODAY_KEY, JSON.stringify(map));
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { unlocked: false, purchased: ["ember"], activePack: "ember", shopViewed: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A short two-beep buzzer using the Web Audio API directly — no audio file
+// to ship, works offline, and is enough to notice without being jarring.
+function playBuzzer() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18].forEach((startAt) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 740;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.16);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.18);
+    });
+  } catch {
+    // Web Audio isn't available (or blocked until a user gesture) — the
+    // in-app banner and OS notification still get the point across.
+  }
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ onAdd, activePack }) {
+  const isPaidPack = activePack !== "ember";
+  return (
+    <div className="empty-state">
+      <div className={`emoji ${isPaidPack ? `pack-${activePack}` : ""}`}>
+        <span className={isPaidPack ? "flame-emoji-animated" : ""}>🔥</span>
+      </div>
+      <h2>No habits yet</h2>
+      <p>Add your first habit and start a streak today.</p>
+      <button className="btn btn-primary" style={{ padding: "14px 28px" }} onClick={onAdd}>
+        + Add your first habit
+      </button>
+    </div>
+  );
+}
+
+const DAY_ICONS = { hit: "✓", due: "!", missed: "✕" };
+
+function WeekDots({ habit }) {
+  const days = getWeekData(habit);
+  return (
+    <div className="week-row">
+      {days.map((day) => (
+        <div className="week-day" key={day.key}>
+          <span className="week-day-label">{day.label}</span>
+          <div className={`week-dot ${day.status} ${day.isToday ? "today" : ""}`}>
+            {DAY_ICONS[day.status] || ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A short burst of falling colored rectangles, purely CSS-driven.
+// Not a real physics sim — just enough motion to feel celebratory
+// without pulling in a confetti library for one animation.
+function Confetti() {
+  const colors = ["#ff5a36", "#ffc145", "#2ec4b6", "#e63946", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. HABIT CARD
+// ---------------------------------------------------------------------
+
+function HabitCard({ habit, onToggleToday, onEdit, onDelete, onNeedsReflection, onToggleReminders }) {
+  const [justLit, setJustLit] = useState(false);
+
+  const intervalDays = habit.intervalDays || 1;
+  const currentStreak = getCurrentStreak(habit.completedDates, intervalDays);
+  const longestStreak = getLongestStreak(habit.completedDates, intervalDays);
+  const doneToday = habit.completedDates.includes(todayKey());
+  const due = getDueInfo(habit);
+
+  // A habit only counts as "failed" once it's actually had a streak that
+  // broke — never for a brand-new habit that just hasn't been started yet.
+  // `lastAcknowledgedFailure` stores which due date the reflection prompt
+  // was last shown for, so it appears once per failure (the next time you
+  // go to check in) rather than on every tap until then.
+  const hasUnacknowledgedFailure =
+    habit.completedDates.length > 0 && due.isOverdue && habit.lastAcknowledgedFailure !== due.dueKey;
+
+  function handleTap() {
+    if (!doneToday && hasUnacknowledgedFailure) {
+      onNeedsReflection(habit, due.dueKey);
+      return;
+    }
+    onToggleToday(habit.id);
+    if (!doneToday) {
+      setJustLit(true);
+      setTimeout(() => setJustLit(false), 450);
+    }
+  }
+
+  return (
+    <div className={`habit-card ${justLit ? "just-completed" : ""}`}>
+      <div className="habit-top-row">
+        <button className="habit-tap-area" onClick={handleTap}>
+          <div className={`habit-emoji-ring ${doneToday ? "lit" : ""} ${justLit ? "just-lit" : ""}`}>
+            {habit.emoji}
+          </div>
+          <div className="habit-info">
+            <div className="habit-name-row">
+              <span className="habit-name">{habit.name}</span>
+              {intervalDays > 1 && (
+                <span className="interval-chip">{intervalLabel(intervalDays)}</span>
+              )}
+            </div>
+            <div className="habit-streak-row">
+              <span className={`habit-streak-num ${justLit ? "bump" : ""}`}>
+                {currentStreak}
+              </span>
+              <span className="habit-streak-label">
+                {intervalDays === 1 ? `day${currentStreak === 1 ? "" : "s"}` : "in a row"}
+              </span>
+              {due.isDueToday && <span className="due-badge">due today</span>}
+            </div>
+            <span className="habit-longest">🏆 best: {longestStreak}</span>
+          </div>
+        </button>
+
+        <div className="habit-actions">
+          <button
+            className="icon-btn"
+            onClick={() => onToggleReminders(habit.id)}
+            aria-label={habit.remindersEnabled === false ? "Turn reminders on" : "Mute reminders"}
+          >
+            {habit.remindersEnabled === false ? "🔕" : "🔔"}
+          </button>
+          <button className="icon-btn" onClick={() => onEdit(habit)} aria-label="Edit habit">✏️</button>
+          <button className="icon-btn" onClick={() => onDelete(habit.id)} aria-label="Delete habit">🗑️</button>
+        </div>
+      </div>
+
+      <WeekDots habit={habit} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5b. REFLECTION PROMPT
+//
+// Shown once per broken streak, the next time you go to check the habit
+// back off. This is the flip side of the streak mechanic: losing a streak
+// is supposed to feel like a small loss, and this is where that's made
+// concrete instead of just a number resetting to 0 — you have to sit with
+// *why* you wanted this habit before you're allowed to just continue on.
+// ---------------------------------------------------------------------
+
+function ReflectionModal({ habit, onConfirm, onCancel }) {
+  const [reason, setReason] = useState("");
+  const longestStreak = getLongestStreak(habit.completedDates, habit.intervalDays || 1);
+  const originalReason = (habit.reason || "").trim();
+
+  // With no prior reason on file there's nothing to retype, so any answer
+  // counts. Otherwise the retyped text has to actually match — the point
+  // is making them write their own words again, not just click through.
+  const matches = originalReason
+    ? reason.trim().toLowerCase() === originalReason.toLowerCase()
+    : reason.trim().length > 0;
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="reflection-header">
+          <div className="reflection-emoji">{habit.emoji}</div>
+          <div>
+            <h2 className="reflection-title">Your streak broke</h2>
+            <p className="reflection-subtitle">
+              {habit.name} — you'd made it to {longestStreak}. Before you jump back in, it's
+              worth remembering why.
+            </p>
+          </div>
+        </div>
+
+        {originalReason ? (
+          <>
+            <span className="field-label">Why you started this</span>
+            <p className="reason-quote">“{originalReason}”</p>
+            <label className="field-label" htmlFor="habit-reason">
+              Type it again, word for word, to recommit
+            </label>
+          </>
+        ) : (
+          <label className="field-label" htmlFor="habit-reason">
+            Why do you want to build this habit?
+          </label>
+        )}
+        <textarea
+          id="habit-reason"
+          className="reason-input"
+          placeholder="e.g. I want more energy in the mornings"
+          value={reason}
+          maxLength={200}
+          autoFocus
+          onChange={(e) => setReason(e.target.value)}
+        />
+
+        <div className="modal-buttons-column">
+          <button
+            className="btn btn-primary"
+            disabled={!matches}
+            onClick={() => onConfirm(originalReason || reason.trim())}
+          >
+            I confirm that I commit myself again to my habit. I am accountable to myself
+          </button>
+          <button className="btn btn-secondary" onClick={onCancel}>Not now</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. ADD / EDIT MODAL
+// ---------------------------------------------------------------------
+
+function AddEditModal({ habit, onSave, onDelete, onClose }) {
+  const isEditing = Boolean(habit);
+  const [name, setName] = useState(habit ? habit.name : "");
+  const [emoji, setEmoji] = useState(habit ? habit.emoji : EMOJI_CHOICES[0]);
+  const [intervalDays, setIntervalDays] = useState(habit ? habit.intervalDays || 1 : 1);
+  const [reason, setReason] = useState(habit ? habit.reason || "" : "");
+
+  function handleSave() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    if (isEditing) {
+      onSave({ ...habit, name: trimmed, emoji, intervalDays, reason: reason.trim() });
+    } else {
+      onSave({
+        id: makeId(),
+        name: trimmed,
+        emoji,
+        intervalDays,
+        reason: reason.trim(),
+        completedDates: [],
+        createdAt: todayKey(),
+      });
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{isEditing ? "Edit habit" : "New habit"}</h2>
+
+        <label className="field-label" htmlFor="habit-name">Name</label>
+        <input
+          id="habit-name"
+          className="name-input"
+          placeholder="e.g. Drink water"
+          value={name}
+          maxLength={40}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <label className="field-label">Icon</label>
+        <div className="emoji-grid">
+          {EMOJI_CHOICES.map((e) => (
+            <button
+              key={e}
+              className={`emoji-option ${emoji === e ? "selected" : ""}`}
+              onClick={() => setEmoji(e)}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label" htmlFor="habit-interval">Plan</label>
+        <div className="interval-slider-row">
+          <input
+            id="habit-interval"
+            type="range"
+            min="1"
+            max="7"
+            step="1"
+            value={intervalDays}
+            onChange={(e) => setIntervalDays(Number(e.target.value))}
+            className="interval-slider"
+          />
+          <span className="interval-slider-value">{intervalLabel(intervalDays)}</span>
+        </div>
+
+        <label className="field-label" htmlFor="habit-reason">
+          Why does this matter to you? <span className="field-optional">(optional)</span>
+        </label>
+        <textarea
+          id="habit-reason"
+          className="reason-input"
+          placeholder="e.g. I want more energy in the mornings"
+          value={reason}
+          maxLength={200}
+          onChange={(e) => setReason(e.target.value)}
+        />
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!name.trim()} onClick={handleSave}>
+            {isEditing ? "Save" : "Add habit"}
+          </button>
+        </div>
+
+        {isEditing && (
+          <button
+            className="btn-danger"
+            style={{ width: "100%", marginTop: 10 }}
+            onClick={() => onDelete(habit.id)}
+          >
+            Delete habit
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6b. THEME SHOP
+//
+// Hidden entirely until `cosmetics.unlocked` — see THEME_UNLOCK_STREAK in
+// App. "Unlocking" a pack here just adds it to `purchased` and applies it;
+// there's no real payment processor wired up yet, so this is a stand-in
+// for the store-billing flow that'll replace it once the app ships.
+// ---------------------------------------------------------------------
+
+function ThemeModal({ cosmetics, onPurchase, onSelect, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Hot Streak themes</h2>
+        <div className="theme-grid">
+          {THEME_PACKS.map((pack) => {
+            const owned = cosmetics.purchased.includes(pack.id);
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelect(pack.id) : onPurchase(pack.id))}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.colors[0]}, ${pack.colors[1]})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">
+                  {active ? "Active" : owned ? "Owned" : `Unlock · ${pack.price}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [habits, setHabits] = useState(loadHabits);
+  const [theme, setTheme] = useState(loadTheme);
+  const [modalState, setModalState] = useState({ open: false, habit: null });
+  const [celebration, setCelebration] = useState(null); // { milestone } | null
+  const [notifsEnabled, setNotifsEnabled] = useState(loadNotifsEnabled);
+  const [reminder, setReminder] = useState(null); // habit currently showing a "buzz" banner
+  const [reflection, setReflection] = useState(null); // { habit, dueKey } | null
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [themeModalOpen, setThemeModalOpen] = useState(false);
+  const [themeOfferOpen, setThemeOfferOpen] = useState(false); // one-time unlock announcement
+
+  // Persist habits any time they change.
+  useEffect(() => {
+    saveHabits(habits);
+  }, [habits]);
+
+  // Persist + apply theme.
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  // Persist + apply the active cosmetic pack (see [data-pack] rules in
+  // styles.css). No attribute at all for the free "ember" pack — it's
+  // just the :root defaults.
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "ember") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  // The "buzzer": whenever a habit becomes due today, fire an in-app banner
+  // + beep + vibration, plus a real OS notification if the user's granted
+  // permission. This only runs while the app is open — there's no backend
+  // here to push a notification while it's fully closed, so it checks on
+  // load, whenever the tab regains focus, and every few minutes while it
+  // stays open, to catch the moment a habit's due date arrives.
+  //
+  // It only ever buzzes ONCE per habit per day (tracked in notifiedMap) —
+  // the 5-minute recheck is just there to catch a due date that arrives
+  // *while* the app is sitting open, not to nag repeatedly. Muted habits
+  // (habit.remindersEnabled === false) skip the buzz entirely and rely on
+  // the passive visual cue instead — the pulsing "due today" badge and the
+  // amber week dot, both driven straight off getDueInfo/getWeekData, so
+  // they show up regardless of whether the habit is muted.
+  useEffect(() => {
+    function checkDueHabits() {
+      const todayK = todayKey();
+      const notifiedMap = loadNotifiedMap();
+      let mapChanged = false;
+
+      habits.forEach((habit) => {
+        const due = getDueInfo(habit);
+        const muted = habit.remindersEnabled === false;
+        if (due.isDueToday && !muted && notifiedMap[habit.id] !== todayK) {
+          buzz(habit);
+          notifiedMap[habit.id] = todayK;
+          mapChanged = true;
+        }
+      });
+
+      if (mapChanged) saveNotifiedMap(notifiedMap);
+    }
+
+    checkDueHabits();
+    const interval = setInterval(checkDueHabits, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", checkDueHabits);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkDueHabits);
+    };
+    // Re-arm whenever habits change OR notifsEnabled changes — otherwise
+    // toggling the bell wouldn't take effect until the habit list changed
+    // too, since the interval/listener above would keep closing over the
+    // old notifsEnabled value from whenever this effect last ran.
+  }, [habits, notifsEnabled]);
+
+  function buzz(habit) {
+    playBuzzer();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+    setReminder(habit);
+    setTimeout(() => setReminder((cur) => (cur && cur.id === habit.id ? null : cur)), 5000);
+
+    if (notifsEnabled && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification("🔥 Hot Streak Habits", {
+          body: `${habit.emoji} ${habit.name} is due today!`,
+          icon: "icon-192.png",
+          tag: habit.id,
+        });
+      } catch {
+        // Some browsers (mobile Chrome) require going through a Service
+        // Worker registration instead — the in-app banner still covers it.
+      }
+    }
+  }
+
+  function toggleNotifications() {
+    if (notifsEnabled) {
+      setNotifsEnabled(false);
+      localStorage.setItem(NOTIF_KEY, "0");
+      return;
+    }
+    if (!("Notification" in window)) {
+      // Not supported here (e.g. iOS Safari unless installed to the home
+      // screen) — the in-app banner/beep/vibration still work regardless.
+      setNotifsEnabled(true);
+      localStorage.setItem(NOTIF_KEY, "1");
+      return;
+    }
+    Notification.requestPermission().then((permission) => {
+      const enabled = permission === "granted";
+      setNotifsEnabled(enabled);
+      localStorage.setItem(NOTIF_KEY, enabled ? "1" : "0");
+    });
+  }
+
+  function openAddModal() {
+    setModalState({ open: true, habit: null });
+  }
+
+  function openEditModal(habit) {
+    setModalState({ open: true, habit });
+  }
+
+  function closeModal() {
+    setModalState({ open: false, habit: null });
+  }
+
+  function handleSaveHabit(habit) {
+    setHabits((prev) => {
+      const exists = prev.some((h) => h.id === habit.id);
+      return exists ? prev.map((h) => (h.id === habit.id ? habit : h)) : [...prev, habit];
+    });
+    closeModal();
+  }
+
+  function handleDeleteHabit(id) {
+    setHabits((prev) => prev.filter((h) => h.id !== id));
+    closeModal();
+  }
+
+  // Per-habit mute switch for the buzzer (beep/vibrate/OS notification).
+  // The visual "due" cues on the card stay on regardless — this only
+  // silences the more attention-grabbing stuff, for habits low-stakes
+  // enough that you don't want to be actively pinged about them.
+  function handleToggleReminders(id) {
+    setHabits((prev) =>
+      prev.map((h) => (h.id === id ? { ...h, remindersEnabled: h.remindersEnabled === false } : h))
+    );
+  }
+
+  function handlePurchasePack(id) {
+    setCosmetics((prev) => ({
+      ...prev,
+      purchased: prev.purchased.includes(id) ? prev.purchased : [...prev.purchased, id],
+      activePack: id,
+    }));
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+
+  function openThemeModal() {
+    setThemeModalOpen(true);
+    setCosmetics((prev) => (prev.shopViewed ? prev : { ...prev, shopViewed: true }));
+  }
+
+  function handleNeedsReflection(habit, dueKey) {
+    setReflection({ habit, dueKey });
+  }
+
+  function handleReflectionCancel() {
+    setReflection(null);
+  }
+
+  // Confirming the reflection both records that this specific failure (the
+  // missed due date) has been acknowledged, saves whatever they wrote as
+  // their reason, and then completes the check-in the tap originally meant
+  // to do — so "recommit & continue" really does continue.
+  function handleReflectionConfirm(reason) {
+    const { habit, dueKey } = reflection;
+    setHabits((prev) =>
+      prev.map((h) => (h.id === habit.id ? { ...h, reason, lastAcknowledgedFailure: dueKey } : h))
+    );
+    setReflection(null);
+    handleToggleToday(habit.id);
+  }
+
+  function handleToggleToday(id) {
+    const key = todayKey();
+
+    setHabits((prev) =>
+      prev.map((h) => {
+        if (h.id !== id) return h;
+
+        const alreadyDone = h.completedDates.includes(key);
+        const completedDates = alreadyDone
+          ? h.completedDates.filter((d) => d !== key)
+          : [...h.completedDates, key];
+
+        // Fire a milestone celebration only when *newly* completing today
+        // pushes the streak to an exact milestone value.
+        if (!alreadyDone) {
+          const newStreak = getCurrentStreak(completedDates, h.intervalDays || 1);
+          if (MILESTONES.includes(newStreak)) {
+            setCelebration({ milestone: newStreak, daily: (h.intervalDays || 1) === 1 });
+            setTimeout(() => setCelebration(null), 2200);
+          }
+
+          // First habit to reach the unlock streak reveals the theme shop —
+          // this is the only time it's offered unprompted; after that it's
+          // just sitting behind the header palette icon.
+          if (newStreak >= THEME_UNLOCK_STREAK && !cosmetics.unlocked) {
+            setCosmetics((prev) => ({ ...prev, unlocked: true }));
+            setThemeOfferOpen(true);
+          }
+        }
+
+        return { ...h, completedDates };
+      })
+    );
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span
+            className={`flame ${cosmetics.activePack !== "ember" ? `pack-${cosmetics.activePack}` : ""}`}
+          >
+            <span className={cosmetics.activePack !== "ember" ? "flame-emoji-animated" : ""}>🔥</span>
+          </span>{" "}
+          Hot Streak
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={openThemeModal} aria-label="Themes">
+            🎨
+            {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={toggleNotifications}
+            aria-label="Toggle reminders"
+          >
+            {notifsEnabled ? "🔔" : "🔕"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {habits.length === 0 ? (
+        <EmptyState onAdd={openAddModal} activePack={cosmetics.activePack} />
+      ) : (
+        <div className="habit-list">
+          {habits.map((habit) => (
+            <HabitCard
+              key={habit.id}
+              habit={habit}
+              onToggleToday={handleToggleToday}
+              onEdit={openEditModal}
+              onDelete={handleDeleteHabit}
+              onNeedsReflection={handleNeedsReflection}
+              onToggleReminders={handleToggleReminders}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="fab">
+        <button onClick={openAddModal}>+ Add habit</button>
+      </div>
+
+      {modalState.open && (
+        <AddEditModal
+          habit={modalState.habit}
+          onSave={handleSaveHabit}
+          onDelete={handleDeleteHabit}
+          onClose={closeModal}
+        />
+      )}
+
+      {reflection && (
+        <ReflectionModal
+          habit={reflection.habit}
+          onConfirm={handleReflectionConfirm}
+          onCancel={handleReflectionCancel}
+        />
+      )}
+
+      {themeModalOpen && (
+        <ThemeModal
+          cosmetics={cosmetics}
+          onPurchase={handlePurchasePack}
+          onSelect={handleSelectPack}
+          onClose={() => setThemeModalOpen(false)}
+        />
+      )}
+
+      {themeOfferOpen && (
+        <div className="modal-overlay" onClick={() => setThemeOfferOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="reflection-header">
+              <div className="reflection-emoji" style={{ border: "2px solid var(--ember-1)", filter: "none" }}>
+                🎉
+              </div>
+              <div>
+                <h2 className="reflection-title" style={{ color: "var(--ember-1)" }}>
+                  {THEME_UNLOCK_STREAK}-day streak!
+                </h2>
+                <p className="reflection-subtitle">
+                  Nice work staying consistent. Check out the flame theme packs to celebrate.
+                </p>
+              </div>
+            </div>
+            <div className="modal-buttons">
+              <button className="btn btn-secondary" onClick={() => setThemeOfferOpen(false)}>Not now</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => { setThemeOfferOpen(false); openThemeModal(); }}
+              >
+                See themes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {celebration && (
+        <>
+          <Confetti />
+          <div className="milestone-banner">
+            🎉 {celebration.milestone}{celebration.daily ? "-day streak!" : " in a row!"}
+          </div>
+        </>
+      )}
+
+      {reminder && (
+        <div className="milestone-banner reminder-banner">
+          🔔 {reminder.emoji} {reminder.name} is due today!
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
