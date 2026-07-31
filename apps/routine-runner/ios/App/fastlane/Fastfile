@@ -24,7 +24,7 @@ platform :ios do
       is_key_content_base64: true,
     )
 
-    Spaceship::ConnectAPI.token = api_key
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
 
     begin
       produce(
