@@ -621,6 +621,18 @@ function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
   });
   useArrowKeys(move, !state.gameOver);
 
+  // Safety net: normally gameOver is only computed right after a move
+  // settles (see applySettled above). But a board can also arrive
+  // already-stuck without going through a move here — e.g. resuming a
+  // save from a previous session, or a board edited directly in
+  // localStorage for testing — so re-check on every tiles change too.
+  useEffect(() => {
+    if (state.gameOver) return;
+    if (isGameOver(state.tiles)) {
+      setState((s) => ({ ...s, gameOver: true }));
+    }
+  }, [state.tiles, state.gameOver]);
+
   useEffect(() => {
     if (!state.gameOver) return;
     if (alreadyOverOnMount.current) {
