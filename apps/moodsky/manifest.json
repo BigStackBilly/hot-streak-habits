@@ -1,6 +1,6 @@
 {
-  "name": "Mood Sky",
-  "short_name": "Mood Sky",
+  "name": "Mood Star",
+  "short_name": "Mood Star",
   "description": "A one-tap-a-day mood tracker — each day becomes a star in your own growing night sky.",
   "start_url": "./index.html",
   "scope": "./",

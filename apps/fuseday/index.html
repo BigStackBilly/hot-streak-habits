@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Fuseday</title>
+<meta name="theme-color" content="#0c0918" />
+
+<!-- Fonts: same pair every sibling app in this repo uses (Baloo 2 for
+     chunky numbers/headings, Inter for body text) — reused as-is per the
+     "no new CDN deps" convention. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Fuseday" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed — has to stay one inline script (not a separate
+     app.js) so the page still works opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// FUSEDAY — a tile-merge number puzzle (2048-style mechanic, original
+// implementation/presentation) with a Daily Challenge twist: everyone
+// gets the exact same seeded sequence of tile spawns on a given
+// calendar day, so two players who make the same moves get the same
+// board — only the swipe choices differ.
+//
+// No login, no backend, everything lives in localStorage under a
+// "fuseday." prefix. Organized top to bottom as:
+//   1. Storage keys + small constants
+//   2. Date / seeded-PRNG helpers (mulberry32)
+//   3. localStorage load/save helpers
+//   4. Game engine — pure functions (move, spawn, game-over, scoring)
+//   5. Tile visuals — pack color math (kept in JS so every cosmetic
+//      pack always has correct text contrast, not hand-tuned per pack)
+//   6. Board / Tile — the rendered 4x4 grid (transform-based tiles)
+//   7. useMoveEngine — shared two-phase (slide, then settle+spawn)
+//      move animation hook, reused by both game modes
+//   8. HomeScreen
+//   9. EndlessScreen
+//  10. DailyScreen + ShareButton
+//  11. ShopModal (cosmetic tile packs) + BackupModal (free export/import)
+//  12. App — top-level state, routing, header
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+const KEYS = {
+  bestScore: "fuseday.bestScore.v1",
+  bestTile: "fuseday.bestTile.v1",
+  endlessState: "fuseday.endlessState.v1",
+  dailyState: "fuseday.dailyState.v1",
+  dailyHistory: "fuseday.dailyHistory.v1",
+  themeMode: "fuseday.themeMode.v1",
+  cosmetics: "fuseday.cosmetics.v1",
+};
+
+const MOVE_MS = 120; // slide transition duration — keep in sync with --move-ms in styles.css
+
+const TILE_PACKS = [
+  { id: "classic", name: "Classic", free: true, low: "#eee4da", high: "#edc22e" },
+  { id: "neon", name: "Neon", price: "$1.99", low: "#1a0b2e", high: "#ff2ec4" },
+  { id: "pastel", name: "Pastel", price: "$1.99", low: "#fdf1ff", high: "#7c5cff" },
+  { id: "wood", name: "Wood", price: "$1.99", low: "#d9b382", high: "#5c3a21" },
+  { id: "midnight", name: "Midnight", price: "$1.99", low: "#2b2d42", high: "#3a86ff" },
+];
+const PACK_BY_ID = Object.fromEntries(TILE_PACKS.map((p) => [p.id, p]));
+
+// ---------------------------------------------------------------------
+// 2. DATE / SEEDED PRNG HELPERS
+//
+// Same "build YYYY-MM-DD from local getters" approach as the sibling
+// apps, rather than toISOString() (which converts to UTC first and can
+// silently roll an evening session into the wrong calendar day).
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Small deterministic string hash -> 32-bit seed, so "2026-07-31" always
+// maps to the same starting state.
+function seedFromString(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h >>> 0;
+}
+
+// mulberry32 — a tiny, fast, well-distributed seeded PRNG (public-domain
+// algorithm, a few lines). `getState()` exposes the generator's current
+// internal counter so a Daily Challenge in progress can be persisted and
+// RESUMED mid-sequence after a reload (rather than re-seeded from
+// scratch, which would replay the same early spawns and desync from the
+// board actually on screen).
+function makeRng(seedState) {
+  let a = seedState >>> 0;
+  const rng = () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  rng.getState = () => a;
+  return rng;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadBestScore() {
+  return Number(localStorage.getItem(KEYS.bestScore)) || 0;
+}
+function loadBestTile() {
+  return Number(localStorage.getItem(KEYS.bestTile)) || 0;
+}
+function loadThemeMode() {
+  return localStorage.getItem(KEYS.themeMode) || "dark";
+}
+function loadCosmetics() {
+  return loadJSON(KEYS.cosmetics, { purchased: ["classic"], activePack: "classic", shopViewed: false });
+}
+function loadDailyHistory() {
+  return loadJSON(KEYS.dailyHistory, []);
+}
+
+// ---------------------------------------------------------------------
+// 4. GAME ENGINE — pure functions, no React
+//
+// A tile is { id, value, r, c }. Board is implicit (16 cells, 0-indexed
+// row/col) — there's no separate grid array kept in state, tiles ARE
+// the source of truth, which is what lets each one keep a stable id
+// (and therefore animate smoothly) across moves.
+// ---------------------------------------------------------------------
+
+function emptyCells(tiles) {
+  const occupied = new Set(tiles.map((t) => t.r * 4 + t.c));
+  const cells = [];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      if (!occupied.has(r * 4 + c)) cells.push({ r, c });
+    }
+  }
+  return cells;
+}
+
+// Places one new tile (90% a "2", 10% a "4") in a random empty cell.
+// `randFn` is either Math.random (Endless) or a seeded mulberry32
+// instance (Daily) — same function, different randomness source, which
+// is the entire trick behind the Daily Challenge being reproducible.
+function spawnTile(tiles, randFn, makeId) {
+  const cells = emptyCells(tiles);
+  if (cells.length === 0) return null;
+  const idx = Math.floor(randFn() * cells.length);
+  const cell = cells[idx];
+  const value = randFn() < 0.9 ? 2 : 4;
+  return { id: makeId(), value, r: cell.r, c: cell.c, isNew: true };
+}
+
+function newGameTiles(randFn, makeId) {
+  const first = spawnTile([], randFn, makeId);
+  const tiles = [first];
+  const second = spawnTile(tiles, randFn, makeId);
+  tiles.push(second);
+  return tiles;
+}
+
+// Computes the result of sliding every tile in `dir`. Returns null if
+// nothing would actually move (illegal move — no wasted spawn). Uses a
+// two-phase design so the caller can animate: `phase1` places every
+// tile (including both halves of a merge, which land on the SAME cell)
+// at their final on-screen position with unchanged values, so the
+// existing DOM nodes just slide there via a CSS transform transition.
+// After that transition elapses, the caller drops the merged pairs and
+// adds one new doubled-value tile per merge (a fresh DOM node, which is
+// what triggers the merge "pop" animation naturally on mount).
+function computeMove(tiles, dir) {
+  const isHorizontal = dir === "left" || dir === "right";
+  const ascending = dir === "left" || dir === "up";
+  let moved = false;
+  const phase1 = [];
+  const merges = [];
+
+  for (let axis = 0; axis < 4; axis++) {
+    const line = tiles
+      .filter((t) => (isHorizontal ? t.r : t.c) === axis)
+      .sort((a, b) => {
+        const av = isHorizontal ? a.c : a.r;
+        const bv = isHorizontal ? b.c : b.r;
+        return ascending ? av - bv : bv - av;
+      });
+
+    let pos = ascending ? 0 : 3;
+    const step = ascending ? 1 : -1;
+    let i = 0;
+    while (i < line.length) {
+      const cur = line[i];
+      const next = line[i + 1];
+      const newR = isHorizontal ? axis : pos;
+      const newC = isHorizontal ? pos : axis;
+
+      if (next && next.value === cur.value) {
+        phase1.push({ ...cur, r: newR, c: newC });
+        phase1.push({ ...next, r: newR, c: newC });
+        merges.push({ r: newR, c: newC, value: cur.value * 2, consumed: [cur.id, next.id] });
+        moved = true; // a merge is always a legal, board-changing move
+        i += 2;
+      } else {
+        if (cur.r !== newR || cur.c !== newC) moved = true;
+        phase1.push({ ...cur, r: newR, c: newC });
+        i += 1;
+      }
+      pos += step;
+    }
+  }
+
+  if (!moved) return null;
+  const scoreGain = merges.reduce((sum, m) => sum + m.value, 0);
+  return { phase1, merges, scoreGain };
+}
+
+// Game over: the grid is full AND no two adjacent tiles share a value
+// (equivalent to "no legal move remains in any of the 4 directions").
+function isGameOver(tiles) {
+  if (tiles.length < 16) return false;
+  const grid = Array.from({ length: 4 }, () => Array(4).fill(0));
+  tiles.forEach((t) => {
+    grid[t.r][t.c] = t.value;
+  });
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const v = grid[r][c];
+      if (c < 3 && grid[r][c + 1] === v) return false;
+      if (r < 3 && grid[r + 1][c] === v) return false;
+    }
+  }
+  return true;
+}
+
+function maxTileValue(tiles) {
+  return tiles.reduce((m, t) => Math.max(m, t.value), 0);
+}
+
+// ---------------------------------------------------------------------
+// 5. TILE VISUALS
+//
+// Each cosmetic pack is just a low/high color pair (see TILE_PACKS) —
+// no per-pack logic, matching the sibling apps' "same code, different
+// numbers" cosmetic pattern. The actual per-tile fill is interpolated
+// in JS (not CSS color-mix) specifically so text-contrast can be
+// computed from the REAL resulting color rather than hand-picked per
+// pack — a light pack like Pastel and a dark one like Neon both stay
+// readable at every tile value with the same formula.
+// ---------------------------------------------------------------------
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function mixRgb(hexA, hexB, t) {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  return a.map((v, i) => Math.round(v + (b[i] - v) * t));
+}
+
+function relativeLuminance([r, g, b]) {
+  const srgb = [r, g, b]
+    .map((v) => v / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+  return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
+}
+
+function tileVisual(value, packId) {
+  const pack = PACK_BY_ID[packId] || PACK_BY_ID.classic;
+  const tier = Math.min(11, Math.max(1, Math.log2(value)));
+  const t = (tier - 1) / 10; // 0..1 across values 2..2048+
+  const rgb = mixRgb(pack.low, pack.high, t);
+  const bg = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  const dark = relativeLuminance(rgb) > 0.5;
+  return { bg, color: dark ? "#4a4458" : "#fbf5ee" };
+}
+
+function tileFontSize(value, cell) {
+  const digits = String(value).length;
+  const base = cell * 0.42;
+  if (digits <= 2) return base;
+  if (digits === 3) return base * 0.8;
+  return base * 0.6;
+}
+
+// ---------------------------------------------------------------------
+// 6. BOARD / TILE
+//
+// Tile position is driven entirely by `transform: translate(px, px)` —
+// never top/left — so moving a tile is a compositor-only operation, not
+// a layout-triggering one. Cell/gap pixel sizes are measured once (and
+// on resize) via ResizeObserver rather than hardcoded, so the same
+// board scales correctly at any width up to the app's 480px cap.
+// ---------------------------------------------------------------------
+
+function useBoardMetrics(containerRef) {
+  const [metrics, setMetrics] = useState({ cell: 0, gap: 0 });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    function measure() {
+      const w = el.clientWidth;
+      if (!w) return;
+      const gap = Math.max(8, w * 0.03);
+      const cell = (w - gap * 5) / 4;
+      setMetrics({ cell, gap });
+    }
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("orientationchange", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("orientationchange", measure);
+    };
+  }, [containerRef]);
+  return metrics;
+}
+
+function Tile({ tile, cell, gap, pack }) {
+  const x = gap + tile.c * (cell + gap);
+  const y = gap + tile.r * (cell + gap);
+  const { bg, color } = tileVisual(tile.value, pack);
+  // Position (translate) lives on the OUTER div, driven purely by JS —
+  // the pop/spawn animation lives on an INNER div (scale only) so the
+  // two transforms never fight: a CSS @keyframes animation on `transform`
+  // fully replaces whatever the property currently holds for its
+  // duration, so animating scale on the same element as the slide
+  // translate would make the tile visually snap to the wrong spot mid-move.
+  const faceClasses = ["tile-face", tile.isNew ? "tile-new" : "", tile.pop ? "tile-pop" : ""].filter(Boolean).join(" ");
+  return (
+    <div className="tile" style={{ width: cell, height: cell, transform: `translate(${x}px, ${y}px)` }}>
+      <div className={faceClasses} style={{ background: bg, color, fontSize: tileFontSize(tile.value, cell) }}>
+        {tile.value}
+      </div>
+    </div>
+  );
+}
+
+function Board({ tiles, activePack, onSwipe, disabled }) {
+  const containerRef = useRef(null);
+  const { cell, gap } = useBoardMetrics(containerRef);
+  const dragRef = useRef(null);
+  const lastTouchRef = useRef(0);
+
+  function beginDrag(x, y) {
+    if (disabled) return;
+    dragRef.current = { x, y };
+  }
+  function endDrag(x, y) {
+    if (!dragRef.current) return;
+    const dx = x - dragRef.current.x;
+    const dy = y - dragRef.current.y;
+    dragRef.current = null;
+    if (disabled) return;
+    const THRESH = 24;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < THRESH) return;
+    if (Math.abs(dx) > Math.abs(dy)) onSwipe(dx > 0 ? "right" : "left");
+    else onSwipe(dy > 0 ? "down" : "up");
+  }
+
+  function onTouchStart(e) {
+    lastTouchRef.current = Date.now();
+    const t = e.touches[0];
+    beginDrag(t.clientX, t.clientY);
+  }
+  function onTouchEnd(e) {
+    lastTouchRef.current = Date.now();
+    const t = e.changedTouches[0];
+    endDrag(t.clientX, t.clientY);
+  }
+  function onMouseDown(e) {
+    if (Date.now() - lastTouchRef.current < 500) return; // ignore synthetic mouse events after a real touch
+    beginDrag(e.clientX, e.clientY);
+  }
+  function onMouseUp(e) {
+    if (Date.now() - lastTouchRef.current < 500) return;
+    endDrag(e.clientX, e.clientY);
+  }
+
+  const bgCells = [];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) bgCells.push({ r, c });
+  }
+
+  return (
+    <div
+      className="board"
+      ref={containerRef}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      onMouseDown={onMouseDown}
+      onMouseUp={onMouseUp}
+    >
+      <div className="board-bg">
+        {bgCells.map(({ r, c }) => {
+          const x = gap + c * (cell + gap);
+          const y = gap + r * (cell + gap);
+          return (
+            <div
+              key={`${r}-${c}`}
+              className="board-cell"
+              style={{ width: cell, height: cell, transform: `translate(${x}px, ${y}px)` }}
+            />
+          );
+        })}
+      </div>
+      <div className="tiles-layer">
+        {tiles.map((t) => (
+          <Tile key={t.id} tile={t} cell={cell} gap={gap} pack={activePack} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. useMoveEngine
+//
+// Shared by Endless and Daily: applies a move in two phases (slide via
+// CSS transition, then — after MOVE_MS — settle: drop consumed tiles,
+// add merge-result tiles, spawn a new tile, hand the result back to the
+// caller). `getTiles` reads through a ref so the engine always slides
+// from the true current board even if the enclosing component hasn't
+// re-rendered since the last state update yet.
+// ---------------------------------------------------------------------
+
+function useMoveEngine({ getTiles, applyPhase1, applySettled, randFn, makeId, disabled }) {
+  const animatingRef = useRef(false);
+  const timeoutRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const move = useCallback(
+    (dir) => {
+      if (disabled || animatingRef.current) return;
+      const currentTiles = getTiles();
+      const result = computeMove(currentTiles, dir);
+      if (!result) return;
+
+      animatingRef.current = true;
+      applyPhase1(result.phase1);
+
+      timeoutRef.current = setTimeout(() => {
+        const consumed = new Set(result.merges.flatMap((m) => m.consumed));
+        const next = result.phase1.filter((t) => !consumed.has(t.id));
+        result.merges.forEach((m) => {
+          next.push({ id: makeId(), value: m.value, r: m.r, c: m.c, pop: true });
+        });
+        const spawn = spawnTile(next, randFn, makeId);
+        if (spawn) next.push(spawn);
+
+        animatingRef.current = false;
+        applySettled({ tiles: next, scoreGain: result.scoreGain });
+      }, MOVE_MS);
+    },
+    [disabled, getTiles, applyPhase1, applySettled, randFn, makeId]
+  );
+
+  return move;
+}
+
+function useArrowKeys(move, active) {
+  useEffect(() => {
+    if (!active) return;
+    function onKey(e) {
+      const map = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+      const dir = map[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      move(dir);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [move, active]);
+}
+
+// ---------------------------------------------------------------------
+// 8. HOME SCREEN
+// ---------------------------------------------------------------------
+
+function HomeScreen({ bestScore, bestTile, dailyPreview, onPlayEndless, onPlayDaily }) {
+  const playedToday = dailyPreview && dailyPreview.status === "done" && dailyPreview.date === todayKey();
+
+  return (
+    <div className="home">
+      <button className="mode-card daily-card" onClick={onPlayDaily}>
+        <div className="mode-card-top">
+          <span className="mode-emoji">🗓️</span>
+          {playedToday ? (
+            <span className="badge badge-done">✓ Done</span>
+          ) : (
+            <span className="badge badge-new">New</span>
+          )}
+        </div>
+        <h2>Daily Challenge</h2>
+        {playedToday ? (
+          <p className="mode-sub">
+            Reached <strong>{dailyPreview.result.tile}</strong> in {dailyPreview.result.moves} moves · Score{" "}
+            {dailyPreview.result.score.toLocaleString()}
+          </p>
+        ) : (
+          <p className="mode-sub">The same board for everyone today. One run, once a day.</p>
+        )}
+      </button>
+
+      <button className="mode-card endless-card" onClick={onPlayEndless}>
+        <div className="mode-card-top">
+          <span className="mode-emoji">♾️</span>
+        </div>
+        <h2>Endless</h2>
+        <p className="mode-sub">
+          Best score <strong>{bestScore.toLocaleString()}</strong> · Best tile{" "}
+          <strong>{bestTile || "—"}</strong>
+        </p>
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. ENDLESS SCREEN
+// ---------------------------------------------------------------------
+
+function startFreshEndless(makeId) {
+  return { tiles: newGameTiles(Math.random, makeId), score: 0, gameOver: false };
+}
+
+function loadEndlessState(makeId) {
+  const stored = loadJSON(KEYS.endlessState, null);
+  if (stored && Array.isArray(stored.tiles)) return stored;
+  return startFreshEndless(makeId);
+}
+
+function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
+  const idCounterRef = useRef(1);
+  const makeId = useCallback(() => idCounterRef.current++, []);
+
+  const [state, setState] = useState(() => {
+    const s = loadEndlessState(makeId);
+    const maxId = s.tiles.reduce((m, t) => Math.max(m, t.id), 0);
+    idCounterRef.current = Math.max(idCounterRef.current, maxId + 1);
+    return s;
+  });
+  const [showGameOver, setShowGameOver] = useState(false);
+  const [bestFlags, setBestFlags] = useState({ score: false, tile: false });
+  const alreadyOverOnMount = useRef(state.gameOver);
+
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  useEffect(() => {
+    saveJSON(KEYS.endlessState, state);
+  }, [state]);
+
+  const getTiles = useCallback(() => stateRef.current.tiles, []);
+  const applyPhase1 = useCallback((phase1) => {
+    setState((s) => ({ ...s, tiles: phase1 }));
+  }, []);
+  const applySettled = useCallback(({ tiles, scoreGain }) => {
+    setState((s) => ({ ...s, tiles, score: s.score + scoreGain, gameOver: isGameOver(tiles) }));
+  }, []);
+
+  const move = useMoveEngine({
+    getTiles,
+    applyPhase1,
+    applySettled,
+    randFn: Math.random,
+    makeId,
+    disabled: state.gameOver,
+  });
+  useArrowKeys(move, !state.gameOver);
+
+  useEffect(() => {
+    if (!state.gameOver) return;
+    if (alreadyOverOnMount.current) {
+      // Resumed an already-finished game via reload — the modal was
+      // already seen and any records already saved last time; don't
+      // reopen it or re-run the best-score comparison.
+      alreadyOverOnMount.current = false;
+      return;
+    }
+    const tile = maxTileValue(state.tiles);
+    const newBestScore = state.score > bestScore;
+    const newBestTile = tile > bestTile;
+    if (newBestScore || newBestTile) {
+      onUpdateBest({ score: Math.max(state.score, bestScore), tile: Math.max(tile, bestTile) });
+    }
+    setBestFlags({ score: newBestScore, tile: newBestTile });
+    setShowGameOver(true);
+    // eslint-disable-next-line
+  }, [state.gameOver]);
+
+  function newGame() {
+    setState(startFreshEndless(makeId));
+    setShowGameOver(false);
+    setBestFlags({ score: false, tile: false });
+    alreadyOverOnMount.current = false;
+  }
+
+  return (
+    <div className="game-screen">
+      <div className="score-row">
+        <div className="score-tile">
+          <span className="score-label">Score</span>
+          <span className="score-value">{state.score.toLocaleString()}</span>
+        </div>
+        <div className="score-tile">
+          <span className="score-label">Best</span>
+          <span className="score-value">{bestScore.toLocaleString()}</span>
+        </div>
+        <button className="btn btn-secondary new-game-btn" onClick={newGame}>
+          New Game
+        </button>
+      </div>
+      <p className="game-hint">Swipe, drag, or use arrow keys to slide every tile.</p>
+      <Board tiles={state.tiles} activePack={activePack} onSwipe={move} disabled={state.gameOver} />
+
+      {showGameOver && (
+        <div className="modal-overlay" onClick={() => setShowGameOver(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <h2>Game over</h2>
+            <p className="modal-sub">
+              Final score: <strong>{state.score.toLocaleString()}</strong>
+            </p>
+            <p className="modal-sub">
+              Best tile reached: <strong>{maxTileValue(state.tiles)}</strong>
+            </p>
+            {bestFlags.score && <p className="best-callout">🎉 New personal best score!</p>}
+            {bestFlags.tile && <p className="best-callout">🏆 New best tile reached!</p>}
+            <div className="modal-buttons">
+              <button className="btn btn-secondary" onClick={() => setShowGameOver(false)}>
+                Close
+              </button>
+              <button className="btn btn-primary" onClick={newGame}>
+                Play again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 10. DAILY SCREEN
+// ---------------------------------------------------------------------
+
+function startFreshDaily(makeId) {
+  const date = todayKey();
+  const rng = makeRng(seedFromString(date));
+  const tiles = newGameTiles(rng, makeId);
+  return { date, status: "in-progress", tiles, score: 0, moves: 0, rngState: rng.getState(), result: null };
+}
+
+function loadDailyState(makeId) {
+  const stored = loadJSON(KEYS.dailyState, null);
+  if (stored && stored.date === todayKey()) return stored;
+  return startFreshDaily(makeId);
+}
+
+function buildShareText(result) {
+  return `Fuseday ${result.date}\nReached ${result.tile} in ${result.moves} moves\nScore: ${result.score.toLocaleString()}`;
+}
+
+function ShareButton({ result }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleShare() {
+    const text = buildShareText(result);
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+      } catch {
+        // user cancelled the native share sheet, or it failed silently — nothing more to do
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard blocked (e.g. no secure context) — nothing more we can do here
+    }
+  }
+
+  return (
+    <button className="btn btn-primary share-btn" onClick={handleShare}>
+      {copied ? "Copied!" : "Share result"}
+    </button>
+  );
+}
+
+function DailyResultView({ result, history }) {
+  return (
+    <div className="game-screen daily-result">
+      <div className="result-card">
+        <h2>Today's result</h2>
+        <div className="result-tile-display">{result.tile}</div>
+        <p className="modal-sub">Reached in {result.moves} moves</p>
+        <p className="modal-sub">Score: {result.score.toLocaleString()}</p>
+        {result.endedEarly && <p className="theme-note">You ended this run early — that's today's locked-in result.</p>}
+        <ShareButton result={result} />
+        <p className="theme-note">That's it for today — come back tomorrow for a new puzzle.</p>
+      </div>
+
+      {history.length > 0 && (
+        <div className="history-list">
+          <h3 className="stats-subheading">Your daily history</h3>
+          <div className="history-header">
+            <span>Date</span>
+            <span>Tile</span>
+            <span>Moves</span>
+            <span>Score</span>
+          </div>
+          {history.slice(0, 14).map((h, i) => (
+            <div className="history-row" key={h.date + "-" + i}>
+              <span className="history-date">{h.date}</span>
+              <span className="history-tile">{h.tile}</span>
+              <span className="history-moves">{h.moves}</span>
+              <span className="history-score">{h.score.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DailyScreen({ history, activePack, onFinishToday }) {
+  const idCounterRef = useRef(1);
+  const makeId = useCallback(() => idCounterRef.current++, []);
+
+  const [state, setState] = useState(() => {
+    const s = loadDailyState(makeId);
+    const maxId = (s.tiles || []).reduce((m, t) => Math.max(m, t.id), 0);
+    idCounterRef.current = Math.max(idCounterRef.current, maxId + 1);
+    return s;
+  });
+
+  // The seeded RNG instance is created ONCE, resuming from whatever
+  // rngState was persisted (or freshly seeded if this is a new day) —
+  // never re-seeded from the date on every render, or a mid-day reload
+  // would replay early spawns instead of continuing the sequence.
+  const rngRef = useRef(null);
+  if (!rngRef.current) rngRef.current = makeRng(state.rngState);
+
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  useEffect(() => {
+    if (state.status === "in-progress") saveJSON(KEYS.dailyState, state);
+  }, [state]);
+
+  const getTiles = useCallback(() => stateRef.current.tiles, []);
+  const applyPhase1 = useCallback((phase1) => {
+    setState((s) => ({ ...s, tiles: phase1 }));
+  }, []);
+  const applySettled = useCallback(({ tiles, scoreGain }) => {
+    setState((s) => ({
+      ...s,
+      tiles,
+      score: s.score + scoreGain,
+      moves: s.moves + 1,
+      rngState: rngRef.current.getState(),
+    }));
+  }, []);
+
+  const move = useMoveEngine({
+    getTiles,
+    applyPhase1,
+    applySettled,
+    randFn: rngRef.current,
+    makeId,
+    disabled: state.status !== "in-progress",
+  });
+  useArrowKeys(move, state.status === "in-progress");
+
+  function finalize(endedEarly) {
+    setState((s) => {
+      if (s.status === "done") return s;
+      const result = { date: s.date, tile: maxTileValue(s.tiles), moves: s.moves, score: s.score, endedEarly: !!endedEarly };
+      const finished = { ...s, status: "done", result };
+      saveJSON(KEYS.dailyState, finished);
+      onFinishToday(result);
+      return finished;
+    });
+  }
+
+  useEffect(() => {
+    if (state.status !== "in-progress") return;
+    if (isGameOver(state.tiles)) finalize(false);
+    // eslint-disable-next-line
+  }, [state.tiles, state.status]);
+
+  if (state.status === "done") {
+    return <DailyResultView result={state.result} history={history} />;
+  }
+
+  function handleEndRun() {
+    if (window.confirm("Lock in today's result right now? You won't be able to keep playing or retry today.")) {
+      finalize(true);
+    }
+  }
+
+  return (
+    <div className="game-screen">
+      <div className="score-row">
+        <div className="score-tile">
+          <span className="score-label">Score</span>
+          <span className="score-value">{state.score.toLocaleString()}</span>
+        </div>
+        <div className="score-tile">
+          <span className="score-label">Moves</span>
+          <span className="score-value">{state.moves}</span>
+        </div>
+        <button className="btn btn-secondary end-run-btn" onClick={handleEndRun}>
+          End run
+        </button>
+      </div>
+      <p className="game-hint">
+        Today's puzzle · {state.date} · the same board and spawns for everyone
+      </p>
+      <Board tiles={state.tiles} activePack={activePack} onSwipe={move} disabled={false} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 11. SHOP MODAL + BACKUP MODAL
+// ---------------------------------------------------------------------
+
+function ShopModal({ cosmetics, onPurchase, onSelect, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Tile packs</h2>
+        <div className="theme-grid">
+          {TILE_PACKS.map((pack) => {
+            const owned = cosmetics.purchased.includes(pack.id);
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelect(pack.id) : onPurchase(pack.id))}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.low}, ${pack.high})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">
+                  {active ? "Active" : owned ? "Owned" : pack.free ? "Free" : `Unlock · ${pack.price}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch. The Classic
+          pack is fully playable forever, free.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("fuseday.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = { app: "fuseday", exportedAt: new Date().toISOString(), data: collectBackupData() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fuseday-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "fuseday" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Fuseday backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("fuseday.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="reflection-subtitle" style={{ margin: "0 0 20px" }}>
+          Save your best scores and daily history to a file on this device, or bring them back after a lost or
+          reinstalled phone.
+        </p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && (
+          <p className="reflection-subtitle" style={{ color: "var(--danger)", marginTop: 10, marginBottom: 0 }}>
+            {error}
+          </p>
+        )}
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 12. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [screen, setScreen] = useState("home"); // "home" | "endless" | "daily"
+  const [themeMode, setThemeMode] = useState(loadThemeMode);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [bestScore, setBestScore] = useState(loadBestScore);
+  const [bestTile, setBestTile] = useState(loadBestTile);
+  const [history, setHistory] = useState(loadDailyHistory);
+  const [dailyPreview, setDailyPreview] = useState(() => loadJSON(KEYS.dailyState, null));
+  const [shopOpen, setShopOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(KEYS.themeMode, themeMode);
+    document.documentElement.setAttribute("data-theme", themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    saveJSON(KEYS.cosmetics, cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "classic") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  function updateBest({ score, tile }) {
+    setBestScore(score);
+    setBestTile(tile);
+    localStorage.setItem(KEYS.bestScore, String(score));
+    localStorage.setItem(KEYS.bestTile, String(tile));
+  }
+
+  function handleFinishToday(result) {
+    setHistory((h) => {
+      const next = [result, ...h].slice(0, 200);
+      saveJSON(KEYS.dailyHistory, next);
+      return next;
+    });
+    setDailyPreview(loadJSON(KEYS.dailyState, null));
+  }
+
+  function handlePurchasePack(id) {
+    setCosmetics((prev) => ({
+      ...prev,
+      purchased: prev.purchased.includes(id) ? prev.purchased : [...prev.purchased, id],
+      activePack: id,
+    }));
+  }
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+  function openShop() {
+    setShopOpen(true);
+    setCosmetics((prev) => (prev.shopViewed ? prev : { ...prev, shopViewed: true }));
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <div className="app-title-row">
+          {screen !== "home" ? (
+            <button className="icon-btn back-btn" onClick={() => setScreen("home")} aria-label="Back to home">
+              ←
+            </button>
+          ) : (
+            <span className="app-logo" aria-hidden="true">🧩</span>
+          )}
+          <h1 className="app-title">Fuseday</h1>
+        </div>
+        <div className="header-buttons">
+          <button className="icon-btn" onClick={openShop} aria-label="Tile packs">
+            🎨
+            {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
+          </button>
+          <button className="icon-btn" onClick={() => setBackupOpen(true)} aria-label="Backup & restore">
+            💾
+          </button>
+          <button
+            className="icon-btn"
+            onClick={() => setThemeMode((m) => (m === "dark" ? "light" : "dark"))}
+            aria-label="Toggle theme"
+          >
+            {themeMode === "dark" ? "☀️" : "🌙"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeScreen
+          bestScore={bestScore}
+          bestTile={bestTile}
+          dailyPreview={dailyPreview}
+          onPlayEndless={() => setScreen("endless")}
+          onPlayDaily={() => setScreen("daily")}
+        />
+      )}
+      {screen === "endless" && (
+        <EndlessScreen bestScore={bestScore} bestTile={bestTile} activePack={cosmetics.activePack} onUpdateBest={updateBest} />
+      )}
+      {screen === "daily" && (
+        <DailyScreen history={history} activePack={cosmetics.activePack} onFinishToday={handleFinishToday} />
+      )}
+
+      {shopOpen && (
+        <ShopModal cosmetics={cosmetics} onPurchase={handlePurchasePack} onSelect={handleSelectPack} onClose={() => setShopOpen(false)} />
+      )}
+      {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android/iOS. Silently no-ops over file:// or
+  // plain http, since both require a secure (https/localhost) context.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

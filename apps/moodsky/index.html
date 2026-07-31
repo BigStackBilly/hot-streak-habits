@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Mood Sky</title>
+<title>Mood Star</title>
 <meta name="theme-color" content="#05060f" />
 
 <!-- Fonts: same pair as the sibling app (Baloo 2 for chunky numbers/headings,
@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Mood Sky" />
+<meta name="apple-mobile-web-app-title" content="Mood Star" />
 </head>
 <body>
 
@@ -602,7 +602,7 @@ function ThemeModal({ cosmetics, onPurchase, onSelect, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Mood Sky skies</h2>
+        <h2>Mood Star skies</h2>
         <div className="theme-grid">
           {SKY_PACKS.map((pack) => {
             const owned = cosmetics.purchased.includes(pack.id);
@@ -701,7 +701,7 @@ function BackupModal({ onClose }) {
         return;
       }
       if (!parsed || parsed.app !== "moodsky" || typeof parsed.data !== "object" || parsed.data === null) {
-        setError("That file doesn't look like a Mood Sky backup.");
+        setError("That file doesn't look like a Mood Star backup.");
         return;
       }
       if (!window.confirm("This will replace everything currently on this device. Continue?")) {
@@ -828,7 +828,7 @@ function App() {
 
       if ("Notification" in window && Notification.permission === "granted") {
         try {
-          new Notification("✨ Mood Sky", {
+          new Notification("✨ Mood Star", {
             body: "Your sky is waiting — log today's mood.",
             icon: "icon-192.png",
           });
@@ -942,7 +942,7 @@ function App() {
           >
             <span className={cosmetics.activePack !== "midnight" ? "sparkle-emoji-animated" : ""}>✨</span>
           </span>{" "}
-          Mood Sky
+          Mood Star
         </h1>
         <div className="header-buttons">
           <button className="theme-toggle" onClick={() => setStatsOpen(true)} aria-label="Stats">📊</button>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Daily Line</title>
+<title>Lineary</title>
 <meta name="theme-color" content="#4F46E5" />
 
 <!-- Fonts: Fraunces (a warm display serif) for the streak number/headings —
@@ -19,7 +19,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Daily Line" />
+<meta name="apple-mobile-web-app-title" content="Lineary" />
 </head>
 <body>
 
@@ -546,7 +546,7 @@ function ShopModal({ cosmetics, onPurchasePack, onSelectPack, onPurchasePro, onE
           })}
         </div>
 
-        <h2 className="pro-heading">Daily Line Pro</h2>
+        <h2 className="pro-heading">Lineary Pro</h2>
         <div className="pro-card">
           <div className="pro-card-text">
             <span className="pro-title">Export your entries</span>
@@ -618,13 +618,13 @@ function BackupModal({ entryCount, onDownload, onRestore, onClose }) {
       try {
         parsed = JSON.parse(reader.result);
       } catch {
-        setError("Couldn't read that file — make sure it's an unedited Daily Line backup.");
+        setError("Couldn't read that file — make sure it's an unedited Lineary backup.");
         setRestoring(false);
         setConfirming(false);
         return;
       }
       if (!parsed || parsed.app !== "dailyline" || typeof parsed.data !== "object" || !parsed.data) {
-        setError("That doesn't look like a Daily Line backup file.");
+        setError("That doesn't look like a Lineary backup file.");
         setRestoring(false);
         setConfirming(false);
         return;
@@ -661,7 +661,7 @@ function BackupModal({ entryCount, onDownload, onRestore, onClose }) {
 
         <div className="backup-restore-block">
           <span className="pro-title">Restore from backup</span>
-          <span className="pro-subtitle">Choose a Daily Line backup (.json) file to bring your entries back.</span>
+          <span className="pro-subtitle">Choose a Lineary backup (.json) file to bring your entries back.</span>
 
           <input
             type="file"
@@ -866,7 +866,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <span className="app-title-mark" aria-hidden="true">―</span> Daily Line
+          <span className="app-title-mark" aria-hidden="true">―</span> Lineary
         </h1>
         <div className="header-buttons">
           <button className="theme-toggle" onClick={openShop} aria-label="Prompt packs & Pro">

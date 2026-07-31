@@ -1,4 +1,4 @@
-# App Store listing draft — Daily Line
+# App Store listing draft — Lineary
 
 Copy-paste source for App Store Connect. Nothing here is final — edit
 freely before submitting.
@@ -18,7 +18,7 @@ A one-line-a-day journal with a gentle streak and a calendar heatmap of your ent
 ## Description
 
 ```
-Daily Line makes journaling take ten seconds, not ten minutes.
+Lineary makes journaling take ten seconds, not ten minutes.
 
 Every day you get one short prompt — a nudge, not a homework assignment — and one line to fill in. Pick a mood, write your sentence, tap save. Come back tomorrow and do it again.
 

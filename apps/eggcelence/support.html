@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Support — Eggcelence</title>
+<style>
+  :root {
+    --bg: #fffaf0;
+    --text: #2b2013;
+    --text-dim: #6b5c45;
+    --border: #f0e2c8;
+    --yolk-1: #ffc94d;
+    --yolk-2: #ff7a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 24px;
+    background: linear-gradient(135deg, var(--yolk-1), var(--yolk-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    display: inline-block;
+  }
+  h2 {
+    font-size: 18px;
+    margin: 32px 0 8px;
+  }
+  p, li {
+    font-size: 15px;
+    color: var(--text);
+  }
+  a {
+    color: var(--yolk-2);
+  }
+  .note {
+    background: #fff2dc;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-top: 32px;
+  }
+  .warn {
+    background: #fdece7;
+    border: 1px solid #f3c8bb;
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 14px;
+    color: #7a2f1c;
+    margin: 12px 0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🥚 Eggcelence — Support</h1>
+
+<h2>Will the timer still alert me if I lock my phone or switch apps?</h2>
+<p>It depends on how you're running Eggcelence:</p>
+<ul>
+  <li><strong>Installed as a native app (App Store / Play Store, or a Capacitor build):</strong> yes. Starting a timer schedules a real notification with the phone's operating system for the exact moment it finishes, so it can alert you — with sound and a vibration where supported — even if the app is backgrounded, the screen is off, or you've switched to something else.</li>
+  <li><strong>Opened as a plain web page (a browser tab, or the raw <code>index.html</code> file):</strong> no reliable background alert is possible. A browser tab cannot schedule a wake-up notification the way a native app can. The countdown will only stay accurate and alert you if you keep that tab open and your device awake until it finishes.</li>
+</ul>
+<div class="warn">This is an honest limitation of how phones and browsers work, not a bug: only a real native app install can wake your device for a scheduled alert. The in-browser version does its best (an on-screen countdown, and a browser notification if you've granted permission and the tab is still open), but it cannot guarantee an alert once the tab is closed or the phone sleeps.</div>
+
+<h2>The app asked for notification permission — why, and is it required?</h2>
+<p>The first time you start any timer, the app asks once for notification permission so it can schedule that background alert. If you say no, timers still run and complete normally in-app — you just won't get an alert if you're not looking at the screen when it finishes. You can change this later in your phone's Settings for the app.</p>
+
+<h2>I canceled a timer — why didn't my eggs-timed count go up?</h2>
+<p>Only a timer that actually reaches zero counts toward your lifetime "eggs timed" total. Canceling early is a deliberate exit and intentionally doesn't count — start it again any time.</p>
+
+<h2>My eggs-timed count / Extra Eggs unlock disappeared</h2>
+<p>All data is stored locally on your device only, nothing is backed up to a server. This means uninstalling the app, or clearing its storage from your phone's settings, permanently removes this data. Use Backup &amp; Restore (the 💾 icon) beforehand to save a copy you can restore later, including after reinstalling or switching phones.</p>
+
+<h2>Can I use this on more than one device?</h2>
+<p>Not automatically — each installation keeps its own separate local data, with no live sync between devices. Use the free Backup &amp; Restore feature to manually move your data from one device to another.</p>
+
+<h2>What's in the Extra Eggs pack?</h2>
+<p>Four additional presets — Ramen egg, Quail egg, Sous vide egg, and Century egg — on top of the 9 free presets. It's a one-time local unlock in the current version of the app; see the shop (🛒 icon) for details.</p>
+
+<h2>Something's broken, or I have a question not covered here</h2>
+<p>Email <a href="mailto:hotstreakhabits@gmail.com">hotstreakhabits@gmail.com</a> and describe what happened, including your phone model and OS version if it's a display or notification issue.</p>
+
+<div class="note">See also the <a href="privacy.html">privacy policy</a> for details on what data the app does (and doesn't) collect.</div>
+
+</div>
+</body>
+</html>

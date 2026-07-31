@@ -1,4 +1,4 @@
-# App Store listing draft — Mood Sky
+# App Store listing draft — Mood Star
 
 Copy-paste source for App Store Connect. Nothing here is final — edit
 freely before submitting.
@@ -18,7 +18,7 @@ A one-tap mood tracker where every day becomes a star. No login, no tracking, no
 ## Description
 
 ```
-Mood Sky turns checking in on yourself into something you actually want to see grow.
+Mood Star turns checking in on yourself into something you actually want to see grow.
 
 Once a day, tap the mood that fits — that's it, one tap. Add a single word if you want to remember why, or skip it. That day becomes a star, placed into your own night sky, glowing in a color that matches how you felt.
 

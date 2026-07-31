@@ -1,0 +1,589 @@
+/* ===================================================================
+   FUSEDAY — visual identity
+   A deep indigo/violet base with a gold->coral "fuse" gradient accent
+   (matching the app icon's spark) — distinct on purpose from every
+   sibling app's palette in this repo. Cosmetic tile packs (see
+   TILE_PACKS in index.html) only ever change tile colors, never the
+   app chrome itself.
+   =================================================================== */
+
+:root {
+  --bg-top: #1c1440;
+  --bg-bottom: #0c0918;
+  --surface: rgba(255, 255, 255, 0.07);
+  --surface-2: rgba(255, 255, 255, 0.12);
+  --text: #f3efff;
+  --text-dim: #a89fc9;
+  --border: rgba(255, 255, 255, 0.14);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+
+  --accent-1: #ffb257;
+  --accent-2: #ff6b6b;
+  --accent-gradient: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  --mint: #4fe3c1;
+  --danger: #ff6b81;
+
+  --board-frame: rgba(255, 255, 255, 0.06);
+  --board-cell: rgba(255, 255, 255, 0.06);
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+
+  --move-ms: 120ms;
+}
+
+[data-theme="light"] {
+  --bg-top: #fff1e0;
+  --bg-bottom: #f1ecff;
+  --surface: rgba(255, 255, 255, 0.75);
+  --surface-2: rgba(255, 255, 255, 0.94);
+  --text: #34294f;
+  --text-dim: #86799f;
+  --border: rgba(70, 50, 100, 0.14);
+  --shadow: 0 2px 16px rgba(90, 60, 120, 0.14);
+
+  --board-frame: rgba(90, 60, 120, 0.08);
+  --board-cell: rgba(90, 60, 120, 0.07);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  background-attachment: fixed;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+  gap: 8px;
+}
+
+.app-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.app-logo {
+  font-size: 22px;
+  filter: drop-shadow(0 2px 4px rgba(255, 107, 107, 0.45));
+}
+
+.back-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+
+.unread-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--bg-bottom);
+}
+
+/* ---------- Home screen ---------- */
+
+.home {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px 20px 40px;
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 6px;
+  padding: 22px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  box-shadow: var(--shadow);
+  min-height: 44px;
+}
+
+.mode-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.mode-emoji {
+  font-size: 30px;
+}
+
+.mode-card h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 21px;
+  margin: 0;
+}
+
+.mode-sub {
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.badge-new {
+  background: var(--accent-gradient);
+  color: #241040;
+}
+
+.badge-done {
+  background: color-mix(in srgb, var(--mint) 25%, transparent);
+  color: var(--mint);
+  border: 1px solid color-mix(in srgb, var(--mint) 50%, transparent);
+}
+
+/* ---------- Game screen ---------- */
+
+.game-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 20px 40px;
+}
+
+.score-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.score-tile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 6px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.score-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.score-value {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 19px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.new-game-btn, .end-run-btn {
+  flex: 1.2;
+  min-height: unset;
+  padding: 0 10px;
+  font-size: 13px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.game-hint {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  text-align: center;
+  margin: 0 0 4px;
+}
+
+/* ---------- Board ---------- */
+
+.board {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-lg);
+  background: var(--board-frame);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.board-bg, .tiles-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.board-cell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: var(--radius-sm);
+  background: var(--board-cell);
+}
+
+.tile {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: transform var(--move-ms) ease-in-out;
+  will-change: transform;
+}
+
+.tile-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+.tile-face.tile-new {
+  animation: tile-pop-in 160ms ease;
+}
+
+.tile-face.tile-pop {
+  animation: tile-pop-merge 200ms ease;
+}
+
+@keyframes tile-pop-in {
+  from { transform: scale(0.3); opacity: 0; }
+}
+
+@keyframes tile-pop-merge {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+/* ---------- Daily result ---------- */
+
+.result-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 26px 20px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.result-card h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 19px;
+  margin: 0 0 6px;
+}
+
+.result-tile-display {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 44px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.share-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.stats-subheading {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 15px;
+  margin: 0 0 4px;
+  color: var(--text-dim);
+}
+
+.history-header, .history-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.3fr;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.history-header {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10.5px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-row {
+  padding: 2px 0;
+}
+
+.history-tile, .history-moves, .history-score {
+  font-weight: 700;
+}
+
+.history-score {
+  text-align: right;
+}
+
+/* ---------- Modal (shared: game over, shop, backup) ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 2, 10, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg-bottom);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--bg-top) 55%, var(--bg-bottom)), var(--bg-bottom));
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 16px;
+}
+
+.modal-sub {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+}
+
+.modal-sub strong {
+  color: var(--text);
+}
+
+.best-callout {
+  font-weight: 700;
+  color: var(--accent-1);
+  font-size: 14.5px;
+  margin: 10px 0 0;
+}
+
+.reflection-subtitle {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: #241040;
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+/* ---------- Tile pack shop ---------- */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+}
+
+.theme-option.selected {
+  border-color: var(--accent-1);
+}
+
+.theme-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.theme-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.theme-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 4px 0 4px;
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 360px) {
+  .app-title { font-size: 20px; }
+  .icon-btn { width: 36px; height: 36px; font-size: 16px; }
+  .result-tile-display { font-size: 36px; }
+}

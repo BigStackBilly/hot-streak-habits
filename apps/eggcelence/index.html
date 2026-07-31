@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Eggcelence</title>
+<meta name="theme-color" content="#FF7A3D" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this repo uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Eggcelence" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// EGGCELENCE — a dead-simple egg timer
+//
+// Sibling app to Hot Streak Habits / Routine Runner / Daily Line / Mood
+// Sky, same house style: this lives inline in index.html (rather than a
+// separate app.js) so the app can be opened directly as a file:// URL
+// with zero server/build step — the in-browser Babel transformer can't
+// fetch a separate local script file over file://, but it can transform
+// a script that's already inline.
+//
+// Organized top to bottom as:
+//   1. Time helpers          - seconds <-> "MM:SS"
+//   2. Preset data            - the 9 free + 4 paid egg styles
+//   3. localStorage helpers   - eggs-timed counter, theme, shop, active timer
+//   4. Sound + native notification helpers (the "it still works backgrounded" bit)
+//   5. Preset glyphs           - small custom SVG icon per egg style
+//   6. PresetButton / CustomTimerCard - the primary "big button" grid
+//   7. ShopModal                - the paid extra-presets pack
+//   7b. BackupModal             - free JSON export/import
+//   8. TimerView                 - the full-screen countdown
+//   9. App                       - top-level state + layout
+//
+// Unlike Hot Streak Habits / Routine Runner, there is deliberately NO
+// streak or "due today" mechanic here — a kitchen timer isn't a daily
+// habit, so loss-aversion pressure would feel out of place. The only
+// gamification is a light-touch lifetime counter ("🥚 42 eggs timed").
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const EGGS_KEY = "eggcelence.eggsTimed.v1";
+const THEME_KEY = "eggcelence.theme.v1";
+const SHOP_KEY = "eggcelence.shop.v1";
+const ACTIVE_TIMER_KEY = "eggcelence.activeTimer.v1";
+
+const MAX_SECONDS = 15 * 60; // every preset (free or paid) is capped at 15 minutes
+
+// ---------------------------------------------------------------------
+// 1. TIME HELPERS
+// ---------------------------------------------------------------------
+
+function formatTime(totalSeconds) {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ---------------------------------------------------------------------
+// 2. PRESET DATA
+//
+// `style` picks which hand-drawn SVG glyph to render (see PresetGlyph).
+// Every preset — free or paid — is capped at MAX_SECONDS (15 min) per
+// the product spec, even the ones (sous vide, century egg) whose real
+// cook time is much longer; this is a kitchen timer, not a recipe app.
+// ---------------------------------------------------------------------
+
+const FREE_PRESETS = [
+  { id: "soft", label: "Soft", sub: "Soft boiled", seconds: 6 * 60, style: "boiled", doneness: 1 },
+  { id: "jammy", label: "Jammy", sub: "Jammy yolk", seconds: 7 * 60, style: "boiled", doneness: 2 },
+  { id: "medium", label: "Medium", sub: "Medium boiled", seconds: 8 * 60, style: "boiled", doneness: 3 },
+  { id: "hard", label: "Hard", sub: "Hard boiled", seconds: 12 * 60, style: "boiled", doneness: 4 },
+  { id: "poached", label: "Poached", sub: "Poached", seconds: 3 * 60, style: "poached" },
+  { id: "sunny", label: "Sunny", sub: "Sunny side up", seconds: 3 * 60, style: "fried", variant: "sunny" },
+  { id: "overeasy", label: "Over easy", sub: "Fried, over easy", seconds: 4 * 60, style: "fried", variant: "overeasy" },
+  { id: "scrambled", label: "Scrambled", sub: "Scrambled", seconds: 2 * 60, style: "scrambled" },
+  { id: "baked", label: "Baked", sub: "Shirred egg", seconds: 15 * 60, style: "baked" },
+];
+
+const PAID_PRESETS = [
+  { id: "ramen", label: "Ramen", sub: "Ramen egg", seconds: 7 * 60, style: "ramen" },
+  { id: "quail", label: "Quail", sub: "Quail egg", seconds: 2 * 60, style: "quail" },
+  { id: "sousvide", label: "Sous vide", sub: "Sous vide egg", seconds: 13 * 60, style: "sousvide" },
+  { id: "century", label: "Century", sub: "Century egg", seconds: 10 * 60, style: "century" },
+];
+
+const ALL_PRESETS = [...FREE_PRESETS, ...PAID_PRESETS];
+const SHOP_PRICE = "$1.99";
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadEggsTimed() {
+  const raw = localStorage.getItem(EGGS_KEY);
+  const n = raw ? parseInt(raw, 10) : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
+function saveEggsTimed(n) {
+  localStorage.setItem(EGGS_KEY, String(n));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadShop() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SHOP_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function saveShop(shop) {
+  localStorage.setItem(SHOP_KEY, JSON.stringify(shop));
+}
+
+// The running timer is persisted by START TIME + DURATION, not a tick
+// count — that's what lets the countdown pick up exactly where it should
+// be after the tab/app was backgrounded or the phone slept, instead of
+// drifting or losing time the way a plain decrementing counter would.
+function loadActiveTimer() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ACTIVE_TIMER_KEY));
+    if (raw && raw.startedAt && raw.seconds) return raw;
+  } catch {}
+  return null;
+}
+
+function saveActiveTimer(timer) {
+  if (timer) {
+    localStorage.setItem(ACTIVE_TIMER_KEY, JSON.stringify(timer));
+  } else {
+    localStorage.removeItem(ACTIVE_TIMER_KEY);
+  }
+}
+
+// ---------------------------------------------------------------------
+// 4. SOUND + NATIVE NOTIFICATION HELPERS
+//
+// A plain setInterval countdown cannot reliably fire once the app is
+// backgrounded or the phone sleeps — mobile OSes throttle or suspend JS
+// timers in that state. Since this app also ships wrapped in Capacitor
+// for real device distribution (see capacitor.config.json), a real timer
+// needs a real native local notification scheduled for (now + duration),
+// via @capacitor/local-notifications.
+//
+// This repo has no sibling app that imports a @capacitor/* runtime
+// plugin from inside the inline browser script yet, so there's no
+// existing pattern to match beyond "don't break plain file:// browsing."
+// A static `import ... from "@capacitor/local-notifications"` would fail
+// to resolve entirely outside the bundled native app (no bundler, no
+// node_modules reachable from a file:// page) — so instead this reaches
+// for the plugin only through `window.Capacitor.Plugins`, which the
+// native runtime injects at launch and a plain browser simply never has.
+// Every call is wrapped so a missing/denied/erroring plugin degrades to
+// "just the in-app countdown" rather than throwing.
+// ---------------------------------------------------------------------
+
+function getLocalNotificationsPlugin() {
+  try {
+    if (
+      window.Capacitor &&
+      typeof window.Capacitor.isNativePlatform === "function" &&
+      window.Capacitor.isNativePlatform() &&
+      window.Capacitor.Plugins &&
+      window.Capacitor.Plugins.LocalNotifications
+    ) {
+      return window.Capacitor.Plugins.LocalNotifications;
+    }
+  } catch {}
+  return null;
+}
+
+function isNativeRuntime() {
+  return getLocalNotificationsPlugin() !== null;
+}
+
+// Schedules a native notification for `seconds` from now. Returns the
+// notification id (so it can be canceled on early cancel) or null if
+// there's no native plugin, permission was denied, or anything throws —
+// callers must treat null as "background alert unavailable," never as
+// an error to surface.
+async function scheduleEggNotification(preset, seconds) {
+  const plugin = getLocalNotificationsPlugin();
+  if (!plugin) return null;
+
+  try {
+    let perm = await plugin.checkPermissions();
+    if (perm.display !== "granted") {
+      perm = await plugin.requestPermissions();
+    }
+    if (perm.display !== "granted") return null;
+
+    const id = Math.floor(Date.now() % 1000000);
+    await plugin.schedule({
+      notifications: [
+        {
+          id,
+          title: "🥚 Eggcelence",
+          body: `Your ${preset.sub.toLowerCase()} is ready!`,
+          schedule: { at: new Date(Date.now() + seconds * 1000) },
+        },
+      ],
+    });
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+async function cancelEggNotification(notifId) {
+  if (notifId == null) return;
+  const plugin = getLocalNotificationsPlugin();
+  if (!plugin) return;
+  try {
+    await plugin.cancel({ notifications: [{ id: notifId }] });
+  } catch {}
+}
+
+// Best-effort browser fallback when there's no native plugin at all
+// (plain file:// / desktop browser testing): ask for Notification
+// permission once, on the first timer start, so a completion notice can
+// be shown IF the tab is still open when the timer finishes. This is
+// honestly not a real background alert — a closed/suspended tab still
+// won't fire it — it's just the closest a bare web page can get, same
+// spirit as the "honest limitation" the sibling apps document for their
+// own reminder buzzers.
+function requestBrowserNotifPermission() {
+  if (isNativeRuntime()) return; // native path handles its own permission
+  try {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  } catch {}
+}
+
+function showBrowserFallbackNotification(preset) {
+  try {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification("🥚 Eggcelence", {
+        body: `Your ${preset.sub.toLowerCase()} is ready!`,
+        icon: "icon-192.png",
+      });
+    }
+  } catch {}
+}
+
+// A cheerful two-tone "ready!" chime — Web Audio API, no audio file to
+// ship, works offline. Same technique as Hot Streak Habits' reminder
+// buzzer / Routine Runner's completion tick, just a brighter interval.
+function playDoneChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [
+      { at: 0, freq: 587.33 },   // D5
+      { at: 0.16, freq: 880 },   // A5
+      { at: 0.32, freq: 1174.66 }, // D6
+    ].forEach(({ at, freq }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      gain.gain.exponentialRampToValueAtTime(0.28, ctx.currentTime + at + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.3);
+      osc.start(ctx.currentTime + at);
+      osc.stop(ctx.currentTime + at + 0.32);
+    });
+  } catch {
+    // Web Audio unavailable / blocked until a user gesture — the visual
+    // "Done!" state and vibration still get the point across.
+  }
+}
+
+// ---------------------------------------------------------------------
+// 5. PRESET GLYPHS — a small custom SVG icon per egg style, instead of
+// reusing the same 🥚/🍳 emoji everywhere. The yolk color/shape shifts
+// with "doneness" for the boiled presets (brighter + bigger = runnier,
+// pale + flat = fully set) so the row of buttons is scannable by shape
+// and color alone, not just the text label.
+// ---------------------------------------------------------------------
+
+function PresetGlyph({ preset }) {
+  const uid = preset.id; // unique-enough for gradient ids within one page
+
+  switch (preset.style) {
+    case "boiled":
+      return <BoiledGlyph uid={uid} doneness={preset.doneness} />;
+    case "poached":
+      return <PoachedGlyph uid={uid} />;
+    case "fried":
+      return <FriedGlyph uid={uid} variant={preset.variant} />;
+    case "scrambled":
+      return <ScrambledGlyph uid={uid} />;
+    case "baked":
+      return <BakedGlyph uid={uid} />;
+    case "ramen":
+      return <RamenGlyph uid={uid} />;
+    case "quail":
+      return <QuailGlyph uid={uid} />;
+    case "sousvide":
+      return <SousVideGlyph uid={uid} />;
+    case "century":
+      return <CenturyGlyph uid={uid} />;
+    default:
+      return <span style={{ fontSize: 28 }}>🥚</span>;
+  }
+}
+
+const EGG_OUTLINE_D = "M32 4 C19 4 6 23 6 39 C6 53 17 61 32 61 C47 61 58 53 58 39 C58 23 45 4 32 4 Z";
+
+// Doneness 1 (soft) -> 4 (hard): yolk shrinks, flattens, and loses its
+// glossy highlight as it "sets," which is the visual doneness cue.
+function BoiledGlyph({ uid, doneness }) {
+  const cfg = {
+    1: { r: 15, glossy: true, color1: "#FFDD6B", color2: "#FF9F1C", drip: true },
+    2: { r: 13, glossy: true, color1: "#FFD35E", color2: "#FB9A2E", drip: false },
+    3: { r: 11, glossy: false, color1: "#F7C34D", color2: "#EE9A34", drip: false },
+    4: { r: 9, glossy: false, color1: "#F3D67A", color2: "#E7B65C", drip: false },
+  }[doneness || 1];
+
+  const gradId = `yolk-${uid}`;
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="38%" cy="35%" r="65%">
+          <stop offset="0%" stopColor={cfg.glossy ? "#FFF3C4" : cfg.color1} />
+          <stop offset="55%" stopColor={cfg.color1} />
+          <stop offset="100%" stopColor={cfg.color2} />
+        </radialGradient>
+      </defs>
+      <path d={EGG_OUTLINE_D} fill="#FFFDF7" stroke="#E9DBBB" strokeWidth="2" />
+      {cfg.drip && (
+        <path d="M32 46 C29 50 29 55 32 57 C35 55 35 50 32 46 Z" fill={`url(#${gradId})`} opacity="0.85" />
+      )}
+      <circle cx="32" cy="34" r={cfg.r} fill={`url(#${gradId})`} />
+    </svg>
+  );
+}
+
+function PoachedGlyph({ uid }) {
+  const gradId = `yolk-${uid}`;
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="38%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="#FFEBA3" />
+          <stop offset="60%" stopColor="#FFC94D" />
+          <stop offset="100%" stopColor="#FB9A2E" />
+        </radialGradient>
+      </defs>
+      <path
+        d="M14 30 C9 23 18 15 27 19 C31 10 45 12 48 21 C57 20 59 32 52 36 C57 43 49 52 40 49 C35 56 22 55 19 48 C10 50 6 39 14 33 Z"
+        fill="#FFFDF7"
+        stroke="#E9DBBB"
+        strokeWidth="2"
+      />
+      <circle cx="31" cy="32" r="9" fill={`url(#${gradId})`} />
+      <path d="M6 55 Q15 51 24 55 T42 55 T58 55" stroke="#9EC9E8" strokeWidth="2.5" fill="none" opacity="0.75" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PanBase() {
+  return (
+    <>
+      <ellipse cx="27" cy="42" rx="24" ry="13" fill="#33363D" />
+      <ellipse cx="27" cy="40" rx="24" ry="12" fill="#4A4E58" />
+      <rect x="46" y="36" width="17" height="6.5" rx="3.25" fill="#33363D" />
+    </>
+  );
+}
+
+function FriedGlyph({ uid, variant }) {
+  const gradId = `yolk-${uid}`;
+  const isSunny = variant !== "overeasy";
+  return (
+    <svg viewBox="0 0 66 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="38%" cy="32%" r="65%">
+          <stop offset="0%" stopColor={isSunny ? "#FFF3C4" : "#FFD35E"} />
+          <stop offset="60%" stopColor={isSunny ? "#FFC94D" : "#FB9A2E"} />
+          <stop offset="100%" stopColor="#EE8A1E" />
+        </radialGradient>
+      </defs>
+      <PanBase />
+      <path
+        d="M9 36 C7 28 15 22 24 24 C27 18 38 18 40 25 C48 24 51 33 45 37 C48 43 41 49 34 46 C30 51 18 50 16 44 C8 45 5 39 9 36 Z"
+        fill="#FFFDF7"
+      />
+      {isSunny ? (
+        <circle cx="25" cy="34" r="8" fill={`url(#${gradId})`} />
+      ) : (
+        <>
+          <ellipse cx="25" cy="35" rx="7.5" ry="6" fill={`url(#${gradId})`} />
+          <path d="M19 33 Q25 30 31 33" stroke="#D97706" strokeWidth="1.5" fill="none" opacity="0.55" strokeLinecap="round" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function ScrambledGlyph({ uid }) {
+  return (
+    <svg viewBox="0 0 66 64" width="34" height="34" aria-hidden="true">
+      <PanBase />
+      <path
+        d="M11 36 q4 -7 10 -3 q3 -7 10 -1 q4 -6 9 -1 q5 -4 8 1 q4 4 -2 8 q3 5 -3 8 q-4 4 -10 1 q-5 5 -11 1 q-6 3 -10 -3 q-5 1 -1 -10 Z"
+        fill="#FFDD8A"
+      />
+      <path d="M18 36 q4 -3 8 0 M28 33 q4 -3 8 0 M22 42 q4 -3 8 0" stroke="#F0A93B" strokeWidth="1.6" fill="none" strokeLinecap="round" opacity="0.7" />
+    </svg>
+  );
+}
+
+function BakedGlyph({ uid }) {
+  const gradId = `yolk-${uid}`;
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="38%" cy="32%" r="65%">
+          <stop offset="0%" stopColor="#FFEBA3" />
+          <stop offset="60%" stopColor="#FFC94D" />
+          <stop offset="100%" stopColor="#FB9A2E" />
+        </radialGradient>
+      </defs>
+      <path d="M8 24 Q10 19 8 14" stroke="#C9B896" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.6" />
+      <path d="M16 22 Q18 16 16 10" stroke="#C9B896" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.6" />
+      <path d="M14 30 L50 30 L45 55 Q32 61 19 55 Z" fill="#E7C9A0" stroke="#C9A876" strokeWidth="2" />
+      <ellipse cx="32" cy="28" rx="17" ry="9" fill="#FFFDF7" stroke="#E9DBBB" strokeWidth="2" />
+      <circle cx="32" cy="28" r="7" fill={`url(#${gradId})`} />
+      <circle cx="21" cy="35" r="1.6" fill="#6B8E4E" />
+      <circle cx="26" cy="39" r="1.6" fill="#6B8E4E" />
+    </svg>
+  );
+}
+
+// ----- paid pack glyphs -----
+
+function RamenGlyph({ uid }) {
+  const gradId = `yolk-${uid}`;
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="38%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="#FFDD6B" />
+          <stop offset="55%" stopColor="#FB9A2E" />
+          <stop offset="100%" stopColor="#C9711A" />
+        </radialGradient>
+      </defs>
+      <path d={EGG_OUTLINE_D} fill="#FBE9C6" stroke="#C9A25B" strokeWidth="2.5" />
+      <path d={EGG_OUTLINE_D} fill="none" stroke="#A9772F" strokeWidth="1.5" opacity="0.4" transform="scale(0.9) translate(3.5 3.7)" />
+      <circle cx="32" cy="34" r="12" fill={`url(#${gradId})`} />
+      <circle cx="32" cy="34" r="12" fill="none" stroke="#8A4E14" strokeWidth="1.2" opacity="0.5" />
+    </svg>
+  );
+}
+
+function QuailGlyph({ uid }) {
+  const speckles = [
+    [24, 20], [38, 18], [30, 28], [42, 30], [22, 36], [36, 40], [28, 46], [40, 22],
+  ];
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <path d="M32 10 C23 10 14 24 14 37 C14 49 22 56 32 56 C42 56 50 49 50 37 C50 24 41 10 32 10 Z" fill="#F3E4C6" stroke="#C9A25B" strokeWidth="2" />
+      {speckles.map(([cx, cy], i) => (
+        <ellipse key={i} cx={cx} cy={cy} rx="2.4" ry="1.8" fill="#8B5A2B" opacity="0.75" transform={`rotate(${(i * 37) % 180} ${cx} ${cy})`} />
+      ))}
+    </svg>
+  );
+}
+
+function SousVideGlyph({ uid }) {
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <rect x="14" y="10" width="36" height="46" rx="10" fill="#BFE3F5" opacity="0.55" stroke="#6FA8C9" strokeWidth="2" />
+      <path d="M14 40 Q32 34 50 40 L50 46 Q32 40 14 46 Z" fill="#6FA8C9" opacity="0.45" />
+      <ellipse cx="32" cy="34" rx="12" ry="10" fill="#FFFDF7" stroke="#E9DBBB" strokeWidth="2" />
+      <circle cx="32" cy="34" r="6" fill="#FFC94D" />
+      <path d="M20 16 Q22 20 20 24" stroke="#6FA8C9" strokeWidth="1.6" fill="none" strokeLinecap="round" opacity="0.7" />
+      <path d="M44 16 Q46 20 44 24" stroke="#6FA8C9" strokeWidth="1.6" fill="none" strokeLinecap="round" opacity="0.7" />
+    </svg>
+  );
+}
+
+function CenturyGlyph({ uid }) {
+  const gradId = `yolk-${uid}`;
+  return (
+    <svg viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+      <defs>
+        <radialGradient id={gradId} cx="40%" cy="35%" r="65%">
+          <stop offset="0%" stopColor="#5C5A46" />
+          <stop offset="60%" stopColor="#3A3826" />
+          <stop offset="100%" stopColor="#1F1E14" />
+        </radialGradient>
+      </defs>
+      <path d={EGG_OUTLINE_D} fill="#3B4A3A" stroke="#1F2B1E" strokeWidth="2" opacity="0.9" />
+      <path d="M16 20 Q24 26 18 34 Q26 38 20 46" stroke="#6B7A56" strokeWidth="1.4" fill="none" opacity="0.5" strokeLinecap="round" />
+      <circle cx="32" cy="35" r="11" fill={`url(#${gradId})`} />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. PRESET BUTTON + CUSTOM TIMER CARD
+// ---------------------------------------------------------------------
+
+function PresetButton({ preset, onStart, locked, onLockedTap }) {
+  return (
+    <button
+      type="button"
+      className={`preset-btn ${locked ? "locked" : ""}`}
+      onClick={() => (locked ? onLockedTap() : onStart(preset))}
+    >
+      {locked && <span className="preset-lock">🔒</span>}
+      <span className="preset-glyph-wrap"><PresetGlyph preset={preset} /></span>
+      <span className="preset-label">{preset.label}</span>
+      <span className="preset-sub">{preset.sub}</span>
+      <span className="preset-time">{formatTime(preset.seconds)}</span>
+    </button>
+  );
+}
+
+// Deliberately secondary: a plain, smaller card below the preset grid,
+// not styled to compete with the "very easy button mode" primary grid.
+function CustomTimerCard({ onStart }) {
+  const [seconds, setSeconds] = useState(300); // 5:00 default
+
+  return (
+    <div className="custom-card">
+      <div className="custom-card-head">
+        <span className="custom-card-title">⏱ Custom timer</span>
+        <span className="custom-card-time">{formatTime(seconds)}</span>
+      </div>
+      <input
+        type="range"
+        className="custom-slider"
+        min="10"
+        max={MAX_SECONDS}
+        step="5"
+        value={seconds}
+        onChange={(e) => setSeconds(Number(e.target.value))}
+        aria-label="Custom timer duration"
+      />
+      <div className="custom-card-row">
+        <input
+          type="number"
+          className="custom-number-input"
+          min="1"
+          max="15"
+          value={Math.round(seconds / 60) || 0}
+          onChange={(e) => {
+            const mins = Math.min(15, Math.max(0, Number(e.target.value) || 0));
+            setSeconds(Math.max(10, mins * 60));
+          }}
+        />
+        <span className="custom-number-label">minutes (max 15)</span>
+        <button
+          type="button"
+          className="btn btn-secondary custom-start-btn"
+          onClick={() => onStart({ id: "custom", label: "Custom", sub: "Custom timer", seconds, style: "custom" })}
+        >
+          Start
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. SHOP MODAL — the paid "Extra Eggs" preset pack
+//
+// Mirrors the sibling apps' cosmetic/Pro shop pattern: "purchasing" only
+// flips a local flag, with an upfront footer note that real App
+// Store/Play Store billing isn't wired up yet.
+// ---------------------------------------------------------------------
+
+function ShopModal({ shop, onPurchase, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Extra Eggs pack</h2>
+
+        {shop.owned ? (
+          <>
+            <p className="upgrade-copy">
+              ✓ Unlocked on this device — thanks for the support! All four extra presets are now in your grid.
+            </p>
+            <div className="modal-buttons">
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">
+              Four more egg styles for the preset grid, for when the classics aren't enough:
+            </p>
+            <div className="shop-preview-grid">
+              {PAID_PRESETS.map((p) => (
+                <div className="shop-preview-item" key={p.id}>
+                  <span className="preset-glyph-wrap small"><PresetGlyph preset={p} /></span>
+                  <span className="shop-preview-label">{p.label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="modal-buttons-column">
+              <button className="btn btn-primary" onClick={onPurchase}>
+                Unlock Extra Eggs — {SHOP_PRICE}
+              </button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlocks the pack locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7b. BACKUP MODAL — export/import everything to a local JSON file
+//
+// Free, always — never gated behind the shop, same stance every sibling
+// app takes on someone's own data. Fully local, no network calls.
+// ---------------------------------------------------------------------
+
+const BACKUP_KEYS = [EGGS_KEY, THEME_KEY, SHOP_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+
+    const payload = { app: "eggcelence", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `eggcelence-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+
+      if (!parsed || parsed.app !== "eggcelence" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like an Eggcelence backup file." });
+        return;
+      }
+
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+
+      Object.keys(parsed.data).forEach((key) => {
+        localStorage.setItem(key, parsed.data[key]);
+      });
+      window.location.reload();
+    };
+    reader.onerror = () => {
+      setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+
+        <p className="upgrade-copy">
+          Save your eggs-timed count, theme, and Extra Eggs unlock to a file on your device — and bring it
+          all back later, even after reinstalling or switching phones.
+        </p>
+
+        <label className="field-label">Download</label>
+        <button type="button" className="btn btn-primary" style={{ width: "100%", marginBottom: 18 }} onClick={handleDownload}>
+          ⬇ Download backup
+        </button>
+
+        <label className="field-label">Restore</label>
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={handleRestoreClick}>
+          ⬆ Restore from backup
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="backup-file-input"
+          onChange={handleFileChange}
+        />
+
+        {status && (
+          <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>
+            {status.text}
+          </p>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. TIMER VIEW — the full-screen countdown
+//
+// Reuses Routine Runner's conic-gradient countdown-ring technique
+// (`.run-timer-ring` / `--pct`), scaled up since this is the app's ONE
+// screen that matters. Self-contained: given the active timer + onDone/
+// onCancel callbacks, it recomputes remaining time from wall-clock time
+// (Date.now() - startedAt) on every tick rather than decrementing a
+// counter, so it's correct even after the tab was backgrounded and the
+// interval got throttled or paused for a while.
+// ---------------------------------------------------------------------
+
+function TimerView({ timer, onDone, onCancel }) {
+  const [now, setNow] = useState(Date.now());
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const chimedRef = useRef(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(interval);
+  }, []);
+
+  const elapsedMs = now - timer.startedAt;
+  const remaining = Math.max(0, timer.seconds - elapsedMs / 1000);
+  const isDone = remaining <= 0;
+  const pct = Math.min(100, Math.round((elapsedMs / 1000 / timer.seconds) * 100));
+
+  // Fire the in-app "it's ready" effects exactly once, the moment the
+  // countdown reaches zero while this screen is actually open/foreground.
+  useEffect(() => {
+    if (isDone && !chimedRef.current) {
+      chimedRef.current = true;
+      playDoneChime();
+      if (navigator.vibrate) navigator.vibrate([180, 90, 180, 90, 260]);
+    }
+  }, [isDone]);
+
+  if (isDone) {
+    return (
+      <div className="timer-view timer-done" onClick={() => onDone(timer)}>
+        <div className="timer-done-badge">🎉</div>
+        <h1 className="timer-done-title">Done!</h1>
+        <p className="timer-done-sub">Your {timer.sub.toLowerCase()} is ready</p>
+        <div className="timer-done-glyph">
+          {timer.style !== "custom" ? <PresetGlyph preset={timer} /> : <span style={{ fontSize: 40 }}>🥚</span>}
+        </div>
+        <button className="btn btn-primary" style={{ marginTop: 28, minWidth: 200, flex: "none" }} onClick={() => onDone(timer)}>
+          Nice — back to eggs
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="timer-view">
+      <div className="timer-header">
+        <button className="timer-cancel-btn" onClick={() => setConfirmingCancel(true)} aria-label="Cancel timer">✕</button>
+        <span className="timer-header-label">{timer.label} · {timer.sub}</span>
+        <span style={{ width: 40 }} />
+      </div>
+
+      <div className="timer-body">
+        <div className="timer-context-glyph">
+          {timer.style !== "custom" ? <PresetGlyph preset={timer} /> : <span style={{ fontSize: 36 }}>🥚</span>}
+        </div>
+        <div className="timer-ring" style={{ "--pct": `${pct}%` }}>
+          <span className="timer-ring-num">{formatTime(remaining)}</span>
+        </div>
+        {!isNativeRuntime() && (
+          <p className="timer-limitation-note">
+            Running in a browser tab — keep this tab open and awake, or a native install will alert you even
+            backgrounded.
+          </p>
+        )}
+      </div>
+
+      {confirmingCancel && (
+        <div className="modal-overlay" onClick={() => setConfirmingCancel(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <h2>Cancel this timer?</h2>
+            <p className="upgrade-copy">
+              {formatTime(remaining)} left on your {timer.sub.toLowerCase()}. Canceling won't count toward your
+              eggs-timed total.
+            </p>
+            <div className="modal-buttons-column">
+              <button className="btn btn-danger-solid" onClick={() => onCancel(timer)}>Cancel timer</button>
+              <button className="btn btn-secondary" onClick={() => setConfirmingCancel(false)}>Keep cooking</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [eggsTimed, setEggsTimed] = useState(loadEggsTimed);
+  const [theme, setTheme] = useState(loadTheme);
+  const [shop, setShop] = useState(loadShop);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [activeTimer, setActiveTimer] = useState(loadActiveTimer);
+  const hasStartedOnceRef = useRef(false);
+
+  useEffect(() => {
+    saveEggsTimed(eggsTimed);
+  }, [eggsTimed]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    saveShop(shop);
+  }, [shop]);
+
+  async function handleStart(preset) {
+    if (!hasStartedOnceRef.current) {
+      hasStartedOnceRef.current = true;
+      requestBrowserNotifPermission(); // no-op on native; harmless if denied
+    }
+
+    const startedAt = Date.now();
+    const notifId = await scheduleEggNotification(preset, preset.seconds);
+
+    const timer = {
+      id: makeId(),
+      presetId: preset.id,
+      label: preset.label,
+      sub: preset.sub,
+      style: preset.style,
+      doneness: preset.doneness,
+      variant: preset.variant,
+      seconds: preset.seconds,
+      startedAt,
+      notifId,
+    };
+
+    saveActiveTimer(timer);
+    setActiveTimer(timer);
+  }
+
+  function handleCancel(timer) {
+    cancelEggNotification(timer.notifId);
+    saveActiveTimer(null);
+    setActiveTimer(null);
+  }
+
+  function handleDone(timer) {
+    // Guard against double-count: only bump the lifetime counter if this
+    // timer is still the one on record (it always will be here, but this
+    // keeps the intent explicit rather than relying on call-once timing).
+    if (loadActiveTimer() && loadActiveTimer().id === timer.id) {
+      setEggsTimed((n) => n + 1);
+    }
+    saveActiveTimer(null);
+    setActiveTimer(null);
+    showBrowserFallbackNotification(timer);
+  }
+
+  function handlePurchase() {
+    setShop({ owned: true });
+  }
+
+  const lockedPresets = shop.owned ? [] : PAID_PRESETS.map((p) => p.id);
+
+  if (activeTimer) {
+    return <TimerView timer={activeTimer} onDone={handleDone} onCancel={handleCancel} />;
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🥚</span> Eggcelence
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setShopOpen(true)} aria-label="Extra Eggs shop">🛒</button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupOpen(true)} aria-label="Backup & Restore">💾</button>
+        </div>
+      </header>
+
+      <p className="eggs-counter">🥚 {eggsTimed} egg{eggsTimed === 1 ? "" : "s"} timed</p>
+
+      <div className="preset-grid">
+        {FREE_PRESETS.map((preset) => (
+          <PresetButton key={preset.id} preset={preset} onStart={handleStart} locked={false} />
+        ))}
+        {PAID_PRESETS.map((preset) => (
+          <PresetButton
+            key={preset.id}
+            preset={preset}
+            onStart={handleStart}
+            locked={lockedPresets.includes(preset.id)}
+            onLockedTap={() => setShopOpen(true)}
+          />
+        ))}
+      </div>
+
+      <CustomTimerCard onStart={handleStart} />
+
+      {shopOpen && <ShopModal shop={shop} onPurchase={handlePurchase} onClose={() => setShopOpen(false)} />}
+      {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

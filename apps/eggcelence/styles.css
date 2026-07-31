@@ -1,0 +1,597 @@
+/* ===================================================================
+   EGGCELENCE — visual identity
+   A warm cream-and-yolk palette (breakfast, not a habit-tracker ember):
+   soft cream/toast background, a bright yolk-yellow-to-toasty-orange
+   gradient reserved for the primary "start" affordances and the
+   countdown ring, same "earned, not decorative" restraint the sibling
+   apps use for their own accent gradients.
+   =================================================================== */
+
+:root {
+  --bg: #fffaf0;
+  --surface: #ffffff;
+  --surface-2: #fff2dc;
+  --text: #2b2013;
+  --text-dim: #8a7a63;
+  --border: #f0e2c8;
+  --shadow: 0 2px 10px rgba(60, 40, 10, 0.08);
+
+  --yolk-1: #ffc94d;
+  --yolk-2: #ff7a3d;
+  --yolk-gradient: linear-gradient(135deg, var(--yolk-1), var(--yolk-2));
+  --done-color: #2fae66;
+  --danger: #e63946;
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+}
+
+[data-theme="dark"] {
+  --bg: #16110a;
+  --surface: #211a10;
+  --surface-2: #2b2216;
+  --text: #fbf0dd;
+  --text-dim: #c2ac8c;
+  --border: #3a2e1c;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 4px;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-title .logo {
+  filter: drop-shadow(0 2px 4px rgba(255, 122, 61, 0.35));
+  display: inline-flex;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Eggs-timed counter ---------- */
+
+.eggs-counter {
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin: 6px 0 4px;
+}
+
+/* ---------- Preset grid (the primary "very easy button mode") ---------- */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 10px 16px 4px;
+}
+
+.preset-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  padding: 14px 6px 12px;
+  min-height: 118px;
+  text-align: center;
+}
+
+.preset-btn:active:not(.locked) {
+  transform: scale(0.96);
+  border-color: var(--yolk-2);
+}
+
+.preset-btn.locked {
+  opacity: 0.6;
+}
+
+.preset-lock {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 13px;
+}
+
+.preset-glyph-wrap {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--surface-2);
+  margin-bottom: 4px;
+}
+
+.preset-glyph-wrap.small {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+}
+
+.preset-label {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.15;
+}
+
+.preset-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
+.preset-time {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--yolk-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ---------- Custom timer card (deliberately secondary) ---------- */
+
+.custom-card {
+  margin: 14px 16px 4px;
+  background: var(--surface);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 16px;
+}
+
+.custom-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.custom-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.custom-card-time {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.custom-slider {
+  width: 100%;
+  accent-color: var(--yolk-2);
+  margin-bottom: 10px;
+}
+
+.custom-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-number-input {
+  width: 56px;
+  padding: 8px 8px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+}
+
+.custom-number-label {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.custom-start-btn {
+  min-width: 76px;
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+/* ---------- Buttons / modal shared with sibling apps ---------- */
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--yolk-gradient);
+  color: #2b2013;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-danger-solid {
+  background: var(--danger);
+  color: white;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 14, 4, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg);
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 16px;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.upgrade-copy {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-buttons-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 16px 0 4px;
+}
+
+/* ---------- Shop modal preview grid ---------- */
+
+.shop-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.shop-preview-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.shop-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* ---------- Backup & restore modal ---------- */
+
+.backup-file-input {
+  display: none;
+}
+
+.backup-status {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 0;
+  text-align: center;
+}
+
+.backup-status-success {
+  color: var(--done-color);
+}
+
+.backup-status-error {
+  color: var(--danger);
+}
+
+/* ---------- Timer view (full screen) ---------- */
+
+.timer-view {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 10;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+
+.timer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: max(20px, env(safe-area-inset-top)) 20px 10px;
+}
+
+.timer-header-label {
+  flex: 1;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timer-cancel-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 16px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timer-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 20px 32px;
+}
+
+.timer-context-glyph {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timer-context-glyph svg {
+  width: 46px;
+  height: 46px;
+}
+
+.timer-ring {
+  width: 260px;
+  height: 260px;
+  max-width: 78vw;
+  max-height: 78vw;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: conic-gradient(var(--yolk-2) var(--pct), var(--surface-2) 0);
+  transition: background 0.3s linear;
+}
+
+.timer-ring-num {
+  width: 82%;
+  height: 82%;
+  border-radius: 50%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 52px;
+  color: var(--text);
+}
+
+.timer-limitation-note {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  max-width: 320px;
+}
+
+/* ---------- Timer done state ---------- */
+
+.timer-done {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+  padding: 32px;
+  cursor: pointer;
+  animation: done-flash 0.6s ease;
+}
+
+@keyframes done-flash {
+  0% { background: var(--yolk-1); }
+  100% { background: var(--bg); }
+}
+
+.timer-done-badge {
+  font-size: 60px;
+  margin-bottom: 4px;
+  animation: done-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes done-pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  70% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.timer-done-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 34px;
+  margin: 0;
+  color: var(--done-color);
+  animation: done-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes done-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.timer-done-sub {
+  font-size: 15px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.timer-done-glyph {
+  margin-top: 18px;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(47, 174, 102, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.timer-done-glyph svg {
+  width: 54px;
+  height: 54px;
+}
