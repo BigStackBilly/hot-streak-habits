@@ -125,6 +125,30 @@ platform :ios do
       is_key_content_base64: true,
     )
 
+    # Work around a confirmed, still-open fastlane bug (fastlane/fastlane#20538,
+    # "Uploading the very first version of my app yields `No data`"): deliver's
+    # upload_metadata unconditionally calls fetch_app_store_review_detail,
+    # which crashes trying to parse an empty response when no review detail
+    # exists yet for a brand-new app version. Pre-creating that record
+    # directly means it already exists by the time deliver looks for it.
+    begin
+      app = Spaceship::ConnectAPI::App.find(app_identifier)
+      version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
+      version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
+
+      Spaceship::ConnectAPI::AppStoreReviewDetail.create(
+        app_store_version_id: version.id,
+        contact_first_name: "Niloc",
+        contact_last_name: "Dekkers",
+        contact_phone: "+31627240888",
+        contact_email: "hotstreakhabits@gmail.com",
+        demo_account_required: false,
+      )
+      UI.message("Created App Store review detail contact info")
+    rescue => e
+      UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
+    end
+
     # Manual release on purpose — even once Apple approves this, it should
     # stay dark until a human explicitly flips it live, not go public the
     # moment review clears.
