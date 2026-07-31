@@ -28,11 +28,15 @@ jobs:
           bundler-cache: true
           working-directory: apps/routine-runner/ios/App
 
+      # Same shared cache key as Hot Streak Habits (ios-ci-keychain-v1),
+      # not a per-app one — see ios-testflight-dailyline.yml for why: a
+      # Distribution certificate is team-wide, and Apple's account-wide
+      # quota is already partly used by other apps.
       - name: Cache CI keychain
         uses: actions/cache@v4
         with:
           path: ~/Library/Keychains/ci_build-db
-          key: ios-ci-keychain-routinerunner-v1
+          key: ios-ci-keychain-v1
 
       - name: Build and upload to TestFlight
         working-directory: apps/routine-runner/ios/App

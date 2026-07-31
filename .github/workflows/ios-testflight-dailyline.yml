@@ -31,14 +31,19 @@ jobs:
           bundler-cache: true
           working-directory: apps/daily-line/ios/App
 
-      # Same cached-keychain trick as Hot Streak Habits, but keyed
-      # separately per app so a bad cert/profile in one app's keychain
-      # can't clobber another's.
+      # Deliberately the SAME cache key as Hot Streak Habits' workflow
+      # (ios-ci-keychain-v1), not a per-app key. A Distribution certificate
+      # is a team-wide credential, not per-app — Apple caps accounts at a
+      # small number of them (already 2 used by Hot Streak + Cold Turkey
+      # Tracker), so every app minting its own would exhaust that quota
+      # fast. Sharing one cached keychain across all apps means `cert`
+      # detects and reuses the same existing certificate everywhere,
+      # exactly like it already does across repeated runs of one app.
       - name: Cache CI keychain
         uses: actions/cache@v4
         with:
           path: ~/Library/Keychains/ci_build-db
-          key: ios-ci-keychain-dailyline-v1
+          key: ios-ci-keychain-v1
 
       - name: Build and upload to TestFlight
         working-directory: apps/daily-line/ios/App
