@@ -26,16 +26,41 @@ platform :ios do
 
     Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
 
+    # `produce` can't register a brand-new app here: its Developer Portal
+    # App ID creation unconditionally requires legacy username/password
+    # Spaceship::Portal auth, even with a ConnectAPI token set globally
+    # (confirmed by trial — it kept failing with "No value found for
+    # 'username'" no matter how the API key was passed/configured). Bundle
+    # ID + app registration is called directly against the App Store
+    # Connect API instead, via the same ConnectAPI client cert/sigh below
+    # already use successfully with API-key-only auth.
     begin
-      produce(
-        app_identifier: app_identifier,
-        app_name: app_name,
-        team_id: ENV["APPLE_TEAM_ID"],
-        sku: sku,
-        language: "English",
-      )
+      unless Spaceship::ConnectAPI::BundleId.find(app_identifier)
+        Spaceship::ConnectAPI::BundleId.create(name: app_name, identifier: app_identifier, platform: "IOS")
+        UI.message("Registered new Bundle ID #{app_identifier}")
+      else
+        UI.message("Bundle ID #{app_identifier} already registered, continuing")
+      end
     rescue => e
-      UI.message("produce: app likely already registered, continuing (#{e.message})")
+      UI.message("Bundle ID registration skipped/failed, continuing (#{e.message})")
+    end
+
+    begin
+      unless Spaceship::ConnectAPI::App.find(app_identifier)
+        Spaceship::ConnectAPI::App.create(
+          name: app_name,
+          version_string: "1.0",
+          sku: sku,
+          primary_locale: "en-US",
+          bundle_id: app_identifier,
+          platforms: ["IOS"],
+        )
+        UI.message("Created App Store Connect app record for #{app_name}")
+      else
+        UI.message("App Store Connect app record for #{app_identifier} already exists, continuing")
+      end
+    rescue => e
+      UI.message("App Store Connect app creation skipped/failed, continuing (#{e.message})")
     end
 
     if File.exist?(keychain_path)
