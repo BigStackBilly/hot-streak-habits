@@ -136,8 +136,7 @@ platform :ios do
       version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
       version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
 
-      Spaceship::ConnectAPI::AppStoreReviewDetail.create(
-        app_store_version_id: version.id,
+      version.create_app_store_review_detail!(
         contact_first_name: "Niloc",
         contact_last_name: "Dekkers",
         contact_phone: "+31627240888",
