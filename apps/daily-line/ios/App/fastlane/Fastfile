@@ -136,14 +136,8 @@ platform :ios do
       version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
       version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
 
-      version.create_app_store_review_detail!(
-        contact_first_name: "Niloc",
-        contact_last_name: "Dekkers",
-        contact_phone: "+31627240888",
-        contact_email: "hotstreakhabits@gmail.com",
-        demo_account_required: false,
-      )
-      UI.message("Created App Store review detail contact info")
+      UI.message("DIAG version methods: #{version.methods.grep(/review/i).sort}")
+      UI.message("DIAG ConnectAPI client methods: #{Spaceship::ConnectAPI.instance_methods(false).grep(/review_detail/i).sort}")
     rescue => e
       UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
     end
