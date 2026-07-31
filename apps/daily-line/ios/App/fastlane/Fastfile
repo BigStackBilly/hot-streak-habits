@@ -150,6 +150,18 @@ platform :ios do
       UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
     end
 
+    begin
+      app = Spaceship::ConnectAPI::App.find(app_identifier)
+      version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
+      UI.message("DIAG version age methods: #{version.methods.grep(/age/i).sort}")
+      UI.message("DIAG version pricing methods: #{version.methods.grep(/pric/i).sort}")
+      UI.message("DIAG app pricing methods: #{app.methods.grep(/pric/i).sort}")
+      UI.message("DIAG version privacy/data methods: #{version.methods.grep(/privacy|data_usage|dataUsage/i).sort}")
+      UI.message("DIAG app privacy/data methods: #{app.methods.grep(/privacy|data_usage|dataUsage/i).sort}")
+    rescue => e
+      UI.message("DIAG probe failed: #{e.message}")
+    end
+
     # Manual release on purpose — even once Apple approves this, it should
     # stay dark until a human explicitly flips it live, not go public the
     # moment review clears.
