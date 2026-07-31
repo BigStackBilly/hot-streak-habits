@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Mood Sky</title>
+<meta name="theme-color" content="#05060f" />
+
+<!-- Fonts: same pair as the sibling app (Baloo 2 for chunky numbers/headings,
+     Inter for body text) — reused as-is per the "no new CDN deps" rule. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Mood Sky" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Same reasoning as the sibling app: this has to
+     stay an inline script (not a separate app.js) so the page still works
+     opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// MOOD SKY — a one-tap-a-day mood tracker with a visual payoff
+//
+// Once a day you pick a mood (and optionally a short word). That day
+// becomes a star, placed into a growing night-sky "constellation" view
+// that accumulates month by month. The growing sky IS the hook — no
+// login, no backend, no ads, everything lives in localStorage.
+//
+// Organized top to bottom as:
+//   1. Date helpers        - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Streak math          - pure functions, no React
+//   3. localStorage helpers - load/save entries, theme, cosmetics
+//   4. Sky helpers           - grouping entries by month, star positions
+//   5. Small presentational components (EmptyState, Star, MonthSky, StarBurst)
+//   6. MoodBar                - the always-docked one-tap mood picker
+//   7. DayDetailModal          - view (and delete) a past day's star
+//   7b. StatsModal              - mood distribution + streak numbers
+//   7c. ThemeModal               - the cosmetic sky-pack shop
+//   7d. BackupModal               - free local export/import of your sky
+//   8. App                        - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect } = React;
+
+const STORAGE_KEY = "moodsky.entries.v1";
+const THEME_KEY = "moodsky.theme.v1";
+const NOTIF_KEY = "moodsky.notifsEnabled.v1";
+const NOTIFIED_TODAY_KEY = "moodsky.notifiedToday.v1";
+const COSMETICS_KEY = "moodsky.cosmetics.v1";
+const MILESTONES = [7, 30, 100];
+const THEME_UNLOCK_STREAK = 10;
+
+// The fixed mood set. Order matters — it's the left-to-right order of the
+// one-tap picker, positive to negative. `color` is the glow color the
+// resulting star gets in the sky, independent of whichever cosmetic sky
+// pack is active (see SKY_PACKS below) — a mood's meaning should stay
+// readable no matter what pack you're using.
+const MOODS = [
+  { id: "great", emoji: "🤩", label: "Great", color: "#ffe38a" },
+  { id: "good", emoji: "🙂", label: "Good", color: "#8ce0ff" },
+  { id: "okay", emoji: "😐", label: "Okay", color: "#c9b8ff" },
+  { id: "low", emoji: "😔", label: "Low", color: "#7d8fc7" },
+  { id: "rough", emoji: "😣", label: "Rough", color: "#ff8fa3" },
+];
+const MOOD_BY_ID = Object.fromEntries(MOODS.map((m) => [m.id, m]));
+
+// Cosmetic sky-color packs. "midnight" is the free default; the rest are
+// paid re-skins of the same --accent-1/--accent-2 gradient variables (see
+// [data-pack="..."] rules in styles.css) — no logic changes, just color.
+// This mirrors the sibling app's THEME_PACKS pattern exactly.
+const SKY_PACKS = [
+  { id: "midnight", name: "Midnight", free: true, colors: ["#6ea8ff", "#b48cff"] },
+  { id: "aurora", name: "Aurora", price: "$1.99", colors: ["#34e0a1", "#7b5cff"] },
+  { id: "sunset", name: "Sunset", price: "$1.99", colors: ["#ff9a56", "#ff5f96"] },
+  { id: "deepspace", name: "Deep Space", price: "$1.99", colors: ["#a768ff", "#ff5fd1"] },
+];
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// Same approach as the sibling app: build "YYYY-MM-DD" keys manually from
+// getFullYear/getMonth/getDate (the browser's LOCAL timezone) rather than
+// using toISOString(), which converts to UTC first and can silently roll
+// a late-evening entry over to the wrong calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+function keyPlusDays(key, delta) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + delta);
+  return toDateKey(date);
+}
+
+// Number of days from keyA to keyB (positive if keyB is later). Goes via
+// Date.UTC on the individual Y/M/D numbers so DST transitions can't shift
+// the result by an hour and round to the wrong day count.
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+// ---------------------------------------------------------------------
+// 2. STREAK MATH
+//
+// Unlike the habit tracker, there's only ever one thing to check in on
+// per day (today's mood), so there's no per-item "plan"/intervalDays —
+// the interval is always 1 day. `entries` is an object keyed by date, so
+// its keys ARE the sorted-once source of truth here.
+// ---------------------------------------------------------------------
+
+function getCurrentStreak(entries) {
+  const keys = Object.keys(entries).sort();
+  if (keys.length === 0) return 0;
+
+  const lastKey = keys[keys.length - 1];
+  const daysSinceLast = daysBetween(lastKey, todayKey());
+
+  // More than a day has passed since the last logged mood with nothing
+  // in between -> yesterday (or earlier) was missed, streak is 0. This
+  // still leaves "today" itself alive up until midnight — no login means
+  // no server clock forcing an early reset.
+  if (daysSinceLast > 1) return 0;
+
+  let streak = 1;
+  for (let i = keys.length - 1; i > 0; i--) {
+    const gap = daysBetween(keys[i - 1], keys[i]);
+    if (gap > 1) break;
+    streak++;
+  }
+  return streak;
+}
+
+function getLongestStreak(entries) {
+  const keys = Object.keys(entries).sort();
+  if (keys.length === 0) return 0;
+
+  let longest = 1;
+  let run = 1;
+  for (let i = 1; i < keys.length; i++) {
+    const gap = daysBetween(keys[i - 1], keys[i]);
+    run = gap === 1 ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+  return longest;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadEntries() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveEntries(entries) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+
+// Dark "night sky" is the natural default here (unlike the sibling app's
+// light default) — the whole visual identity is built around glowing
+// stars on a dark field, so that's what a brand-new install should see.
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "dark";
+}
+
+function loadNotifsEnabled() {
+  return localStorage.getItem(NOTIF_KEY) === "1";
+}
+
+// Tracks the last date we already sent the gentle "log today" nudge, so
+// reopening the app or the periodic recheck doesn't re-nag every few
+// minutes. Unlike the habit tracker (one map entry per habit), there's
+// only one thing to remind about here, so this is just a single flag.
+function loadNotifiedMap() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTIFIED_TODAY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNotifiedMap(map) {
+  localStorage.setItem(NOTIFIED_TODAY_KEY, JSON.stringify(map));
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { unlocked: false, purchased: ["midnight"], activePack: "midnight", shopViewed: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+// A short, gentle two-tone chime using the Web Audio API directly — no
+// audio file to ship, works offline. Pitched a little higher/softer than
+// the sibling app's buzzer, since this is a nudge, not an alarm.
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.2].forEach((startAt, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = i === 0 ? 880 : 1318.5;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.22);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.24);
+    });
+  } catch {
+    // Web Audio isn't available (or blocked until a user gesture) — the
+    // in-app banner still gets the point across.
+  }
+}
+
+// ---------------------------------------------------------------------
+// 4. SKY HELPERS
+//
+// Turning a flat {date: {mood, tag}} map into month-grouped, positioned
+// stars for the constellation view.
+// ---------------------------------------------------------------------
+
+// Small deterministic string hash so a given date always lands in the
+// same spot in its sky — no jitter on re-render, no stored coordinates.
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+// Places a day's star left-to-right roughly in calendar order within its
+// month (so the sky reads chronologically, oldest-to-newest), with a
+// hash-seeded jitter on both axes so it looks like an organic starfield
+// rather than a grid.
+function starPosition(dateKey, dayOfMonth, daysInMonth) {
+  const h = hashStr(dateKey);
+  const xBase = ((dayOfMonth - 0.5) / daysInMonth) * 100;
+  const xJitter = ((h % 700) / 100) - 3.5; // +-3.5%
+  const yJitter = 15 + (Math.floor(h / 700) % 700) / 700 * 70; // 15%-85%
+  return { x: Math.min(97, Math.max(3, xBase + xJitter)), y: yJitter };
+}
+
+function groupByMonth(entries) {
+  const groups = {};
+  Object.keys(entries).forEach((key) => {
+    const monthKey = key.slice(0, 7);
+    if (!groups[monthKey]) groups[monthKey] = [];
+    groups[monthKey].push({ key, ...entries[key] });
+  });
+  Object.values(groups).forEach((list) => list.sort((a, b) => a.key.localeCompare(b.key)));
+  return groups;
+}
+
+function monthLabel(monthKey) {
+  const [y, m] = monthKey.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+// Mood counts within the last 30 days (today inclusive), used by the
+// stats view's distribution bars.
+function getMoodDistribution(entries) {
+  const counts = {};
+  MOODS.forEach((m) => (counts[m.id] = 0));
+  const start = keyPlusDays(todayKey(), -29);
+  Object.keys(entries).forEach((key) => {
+    if (key >= start && key <= todayKey()) {
+      const mood = entries[key].mood;
+      if (counts[mood] !== undefined) counts[mood]++;
+    }
+  });
+  return counts;
+}
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ activePack }) {
+  const isPaidPack = activePack !== "midnight";
+  return (
+    <div className="empty-state">
+      <div className={`emoji ${isPaidPack ? `pack-${activePack}` : ""}`}>
+        <span className={isPaidPack ? "sparkle-emoji-animated" : ""}>✨</span>
+      </div>
+      <h2>Your sky is empty</h2>
+      <p>Pick a mood below to place your first star.</p>
+    </div>
+  );
+}
+
+function Star({ entryKey, mood, position, onTap }) {
+  const delay = (hashStr(entryKey) % 400) / 100; // stagger the twinkle, 0-4s
+  return (
+    <button
+      className="star"
+      style={{
+        left: `${position.x}%`,
+        top: `${position.y}%`,
+        "--star-color": mood.color,
+        animationDelay: `${delay}s`,
+      }}
+      onClick={() => onTap(entryKey)}
+      aria-label={`${mood.label} on ${entryKey}`}
+    >
+      <span className="star-core" />
+    </button>
+  );
+}
+
+// One month's worth of stars, loosely constellation-lined in calendar
+// order. A brand-new month with one entry just shows a single star —
+// nothing renders until there's at least a day logged in it.
+function MonthSky({ monthKey, days, onStarTap }) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+
+  const points = days.map((d) => ({
+    ...d,
+    pos: starPosition(d.key, Number(d.key.slice(8, 10)), daysInMonth),
+  }));
+
+  const polylinePoints = points.map((p) => `${p.pos.x},${p.pos.y}`).join(" ");
+
+  return (
+    <div className="month-sky">
+      <div className="month-label">{monthLabel(monthKey)}</div>
+      <div className="month-canvas">
+        {points.length > 1 && (
+          <svg className="constellation-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <polyline points={polylinePoints} vectorEffect="non-scaling-stroke" />
+          </svg>
+        )}
+        {points.map((p) => (
+          <Star
+            key={p.key}
+            entryKey={p.key}
+            mood={MOOD_BY_ID[p.mood] || MOODS[2]}
+            position={p.pos}
+            onTap={onStarTap}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// A short burst of falling sparkle glyphs on a milestone streak — the sky
+// equivalent of the sibling app's confetti burst.
+function StarBurst() {
+  const glyphs = ["✨", "⭐", "🌟", "💫"];
+  const pieces = Array.from({ length: 22 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    glyph: glyphs[i % glyphs.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+    size: 14 + Math.random() * 12,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="star-piece"
+          style={{
+            left: `${p.left}%`,
+            fontSize: `${p.size}px`,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        >
+          {p.glyph}
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. MOOD BAR — the always-docked, one-tap daily picker
+//
+// Tapping a mood immediately logs (or overwrites) today's entry — that's
+// the one required tap. The optional tag input only appears once a mood
+// is chosen, so it can never get in the way of the primary action.
+// ---------------------------------------------------------------------
+
+function MoodBar({ todayEntry, onPick, onTagChange }) {
+  const [tagDraft, setTagDraft] = useState(todayEntry ? todayEntry.tag || "" : "");
+
+  // Keep the draft in sync if today's mood changes (e.g. tapped a
+  // different mood) or on first mount once an entry already exists.
+  useEffect(() => {
+    setTagDraft(todayEntry ? todayEntry.tag || "" : "");
+  }, [todayEntry && todayEntry.mood]);
+
+  const mood = todayEntry ? MOOD_BY_ID[todayEntry.mood] : null;
+
+  function commitTag() {
+    if (todayEntry) onTagChange(tagDraft.trim());
+  }
+
+  return (
+    <div className="mood-bar">
+      <div className="mood-bar-label">
+        {mood ? (
+          <>
+            Today: <strong style={{ color: mood.color }}>{mood.emoji} {mood.label}</strong> — tap another to change
+          </>
+        ) : (
+          "How's today going?"
+        )}
+      </div>
+      <div className="mood-row">
+        {MOODS.map((m) => (
+          <button
+            key={m.id}
+            className={`mood-option ${todayEntry && todayEntry.mood === m.id ? "selected" : ""}`}
+            style={{ "--mood-color": m.color }}
+            onClick={() => onPick(m.id)}
+            aria-label={m.label}
+          >
+            <span className="mood-emoji">{m.emoji}</span>
+          </button>
+        ))}
+      </div>
+      {todayEntry && (
+        <input
+          className="tag-input"
+          placeholder="add a word (optional)"
+          value={tagDraft}
+          maxLength={24}
+          onChange={(e) => setTagDraft(e.target.value)}
+          onBlur={commitTag}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commitTag();
+              e.currentTarget.blur();
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. DAY DETAIL MODAL — view (and undo) a past star
+// ---------------------------------------------------------------------
+
+function DayDetailModal({ entry, onClose, onDelete }) {
+  const mood = MOOD_BY_ID[entry.mood] || MOODS[2];
+  const [y, m, d] = entry.key.split("-").map(Number);
+  const dateLabel = new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="reflection-header">
+          <div className="day-detail-emoji" style={{ "--star-color": mood.color }}>{mood.emoji}</div>
+          <div>
+            <h2 className="reflection-title" style={{ color: mood.color }}>{mood.label}</h2>
+            <p className="reflection-subtitle">{dateLabel}</p>
+          </div>
+        </div>
+
+        {entry.tag ? (
+          <p className="reason-quote">“{entry.tag}”</p>
+        ) : (
+          <p className="reflection-subtitle" style={{ margin: "0 0 20px" }}>No note added for this day.</p>
+        )}
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          <button className="btn-danger" onClick={() => onDelete(entry.key)}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7b. STATS MODAL
+// ---------------------------------------------------------------------
+
+function StatsModal({ entries, onClose }) {
+  const currentStreak = getCurrentStreak(entries);
+  const longestStreak = getLongestStreak(entries);
+  const totalLogged = Object.keys(entries).length;
+  const dist = getMoodDistribution(entries);
+  const windowTotal = Object.values(dist).reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Your sky, in numbers</h2>
+
+        <div className="stats-row">
+          <div className="stat-tile">
+            <span className="stat-num">{currentStreak}</span>
+            <span className="stat-label">current streak</span>
+          </div>
+          <div className="stat-tile">
+            <span className="stat-num">{longestStreak}</span>
+            <span className="stat-label">longest streak</span>
+          </div>
+          <div className="stat-tile">
+            <span className="stat-num">{totalLogged}</span>
+            <span className="stat-label">stars placed</span>
+          </div>
+        </div>
+
+        <h3 className="stats-subheading">Last 30 days</h3>
+        <div className="mood-dist">
+          {MOODS.map((m) => {
+            const count = dist[m.id] || 0;
+            const pct = windowTotal ? Math.round((count / windowTotal) * 100) : 0;
+            return (
+              <div className="dist-row" key={m.id}>
+                <span className="dist-emoji">{m.emoji}</span>
+                <span className="dist-label">{m.label}</span>
+                <div className="dist-bar-track">
+                  <div className="dist-bar-fill" style={{ width: `${pct}%`, background: m.color }} />
+                </div>
+                <span className="dist-count">{count}</span>
+              </div>
+            );
+          })}
+        </div>
+        {windowTotal === 0 && <p className="theme-note">No moods logged in the last 30 days yet.</p>}
+
+        <div className="modal-buttons" style={{ marginTop: 18 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7c. SKY SHOP
+//
+// "Buying" a pack right now only sets activePack/purchased locally —
+// there's no real payment processor wired in yet, which the modal's
+// footer note is upfront about, exactly like the sibling app's
+// ThemeModal. That'll need to be swapped for actual App Store/Play
+// Store billing once this ships for real.
+// ---------------------------------------------------------------------
+
+function ThemeModal({ cosmetics, onPurchase, onSelect, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Mood Sky skies</h2>
+        <div className="theme-grid">
+          {SKY_PACKS.map((pack) => {
+            const owned = cosmetics.purchased.includes(pack.id);
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelect(pack.id) : onPurchase(pack.id))}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.colors[0]}, ${pack.colors[1]})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">
+                  {active ? "Active" : owned ? "Owned" : `Unlock · ${pack.price}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7d. BACKUP MODAL
+//
+// Everything here lives only in this device's localStorage, which means
+// losing the phone or reinstalling loses the whole sky permanently — a
+// bigger deal than in most apps, since the entire hook is a constellation
+// that visibly grows over weeks/months. This is a genuinely free, always-
+// available export/import of the raw "moodsky.*" localStorage keys as one
+// JSON file, kept fully offline (no network calls) and deliberately NOT
+// gated behind ThemeModal — your own data recovery should never be a paid
+// feature.
+// ---------------------------------------------------------------------
+
+// Every "moodsky.*"-prefixed key currently in localStorage, gathered by
+// prefix rather than a hardcoded list so a future new key is automatically
+// included without this function needing an update.
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("moodsky.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = {
+      app: "moodsky",
+      exportedAt: new Date().toISOString(),
+      data: collectBackupData(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mood-sky-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // reset so choosing the same file again still fires onChange
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "moodsky" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Mood Sky backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("moodsky.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      // Full reload so every piece of state (entries, theme, cosmetics,
+      // notif settings) re-hydrates fresh from the restored localStorage
+      // instead of trying to patch a dozen pieces of live React state.
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="reflection-subtitle" style={{ margin: "0 0 20px" }}>
+          Save your sky to a file on this device, or bring it back after a lost or reinstalled phone.
+        </p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && (
+          <p className="reflection-subtitle" style={{ color: "var(--danger)", marginTop: 10, marginBottom: 0 }}>
+            {error}
+          </p>
+        )}
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [entries, setEntries] = useState(loadEntries);
+  const [theme, setTheme] = useState(loadTheme);
+  const [notifsEnabled, setNotifsEnabled] = useState(loadNotifsEnabled);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [dayDetailKey, setDayDetailKey] = useState(null);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [themeModalOpen, setThemeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [themeOfferOpen, setThemeOfferOpen] = useState(false);
+  const [celebration, setCelebration] = useState(null); // { milestone } | null
+  const [reminderBanner, setReminderBanner] = useState(false);
+
+  // Persist entries any time they change.
+  useEffect(() => {
+    saveEntries(entries);
+  }, [entries]);
+
+  // Persist + apply theme (dark "night" vs light "dawn").
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  // Persist + apply the active cosmetic sky pack. No attribute at all for
+  // the free "midnight" pack — it's just the :root defaults.
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "midnight") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  // The gentle daily nudge: if today has no entry yet and reminders are
+  // on, fire an in-app banner + soft chime + short vibration, plus a real
+  // OS notification if permission's been granted. Same "only while the
+  // app is open" honesty as the sibling app — there's no backend here to
+  // push to a closed app. Fires at most ONCE per day (tracked via
+  // notifiedMap.lastNotified), re-checked on load, on regaining focus,
+  // and every few minutes while the app stays open.
+  useEffect(() => {
+    function checkReminder() {
+      const todayK = todayKey();
+      if (entries[todayK]) return; // already logged today, nothing to nudge about
+      if (!notifsEnabled) return;
+
+      const notifiedMap = loadNotifiedMap();
+      if (notifiedMap.lastNotified === todayK) return;
+
+      playChime();
+      if (navigator.vibrate) navigator.vibrate([120]);
+      setReminderBanner(true);
+      setTimeout(() => setReminderBanner(false), 5000);
+
+      notifiedMap.lastNotified = todayK;
+      saveNotifiedMap(notifiedMap);
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          new Notification("✨ Mood Sky", {
+            body: "Your sky is waiting — log today's mood.",
+            icon: "icon-192.png",
+          });
+        } catch {
+          // Some browsers require a Service Worker registration instead —
+          // the in-app banner still covers it.
+        }
+      }
+    }
+
+    checkReminder();
+    const interval = setInterval(checkReminder, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", checkReminder);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkReminder);
+    };
+  }, [entries, notifsEnabled]);
+
+  function toggleNotifications() {
+    if (notifsEnabled) {
+      setNotifsEnabled(false);
+      localStorage.setItem(NOTIF_KEY, "0");
+      return;
+    }
+    if (!("Notification" in window)) {
+      // Not supported here (e.g. iOS Safari unless installed to the home
+      // screen) — the in-app banner/chime/vibration still work regardless.
+      setNotifsEnabled(true);
+      localStorage.setItem(NOTIF_KEY, "1");
+      return;
+    }
+    Notification.requestPermission().then((permission) => {
+      const enabled = permission === "granted";
+      setNotifsEnabled(enabled);
+      localStorage.setItem(NOTIF_KEY, enabled ? "1" : "0");
+    });
+  }
+
+  // The one required tap: pick a mood, today's star exists. Tapping a
+  // different mood later the same day just overwrites it — moods aren't
+  // meant to be a precise log, just today's honest snapshot.
+  function handlePickMood(moodId) {
+    const key = todayKey();
+    setEntries((prev) => {
+      const alreadyLoggedToday = Boolean(prev[key]);
+      const next = { ...prev, [key]: { mood: moodId, tag: prev[key] ? prev[key].tag || "" : "" } };
+
+      // Milestone celebration + one-time theme-shop offer only fire the
+      // first time TODAY gets newly logged, not on every mood change.
+      if (!alreadyLoggedToday) {
+        const newStreak = getCurrentStreak(next);
+        if (MILESTONES.includes(newStreak)) {
+          setCelebration({ milestone: newStreak });
+          setTimeout(() => setCelebration(null), 2200);
+        }
+        if (newStreak >= THEME_UNLOCK_STREAK && !cosmetics.unlocked) {
+          setCosmetics((c) => ({ ...c, unlocked: true }));
+          setThemeOfferOpen(true);
+        }
+      }
+
+      return next;
+    });
+  }
+
+  function handleTagChange(tag) {
+    const key = todayKey();
+    setEntries((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], tag } } : prev));
+  }
+
+  function handleDeleteEntry(key) {
+    setEntries((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setDayDetailKey(null);
+  }
+
+  function handlePurchasePack(id) {
+    setCosmetics((prev) => ({
+      ...prev,
+      purchased: prev.purchased.includes(id) ? prev.purchased : [...prev.purchased, id],
+      activePack: id,
+    }));
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+
+  function openThemeModal() {
+    setThemeModalOpen(true);
+    setCosmetics((prev) => (prev.shopViewed ? prev : { ...prev, shopViewed: true }));
+  }
+
+  const currentStreak = getCurrentStreak(entries);
+  const longestStreak = getLongestStreak(entries);
+  const todayEntry = entries[todayKey()] || null;
+  const groups = groupByMonth(entries);
+  const monthKeys = Object.keys(groups).sort().reverse(); // newest month first
+  const dayDetailEntry = dayDetailKey ? { key: dayDetailKey, ...entries[dayDetailKey] } : null;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span
+            className={`sparkle ${cosmetics.activePack !== "midnight" ? `pack-${cosmetics.activePack}` : ""}`}
+          >
+            <span className={cosmetics.activePack !== "midnight" ? "sparkle-emoji-animated" : ""}>✨</span>
+          </span>{" "}
+          Mood Sky
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setStatsOpen(true)} aria-label="Stats">📊</button>
+          <button className="theme-toggle" onClick={openThemeModal} aria-label="Skies">
+            🎨
+            {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
+          </button>
+          <button className="theme-toggle" onClick={toggleNotifications} aria-label="Toggle reminders">
+            {notifsEnabled ? "🔔" : "🔕"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setBackupModalOpen(true)}
+            aria-label="Backup & Restore"
+          >
+            💾
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            aria-label="Toggle dawn mode"
+          >
+            {theme === "dark" ? "🌅" : "🌙"}
+          </button>
+        </div>
+      </header>
+
+      <div className="streak-strip">
+        <span className="streak-num">{currentStreak}</span>
+        <span className="streak-label">day streak</span>
+        <span className="streak-sep">·</span>
+        <span className="streak-best">🏆 best {longestStreak}</span>
+      </div>
+
+      {monthKeys.length === 0 ? (
+        <EmptyState activePack={cosmetics.activePack} />
+      ) : (
+        <div className="sky-scroll">
+          {monthKeys.map((mk) => (
+            <MonthSky key={mk} monthKey={mk} days={groups[mk]} onStarTap={setDayDetailKey} />
+          ))}
+        </div>
+      )}
+
+      <MoodBar todayEntry={todayEntry} onPick={handlePickMood} onTagChange={handleTagChange} />
+
+      {dayDetailEntry && (
+        <DayDetailModal
+          entry={dayDetailEntry}
+          onClose={() => setDayDetailKey(null)}
+          onDelete={handleDeleteEntry}
+        />
+      )}
+
+      {statsOpen && <StatsModal entries={entries} onClose={() => setStatsOpen(false)} />}
+
+      {themeModalOpen && (
+        <ThemeModal
+          cosmetics={cosmetics}
+          onPurchase={handlePurchasePack}
+          onSelect={handleSelectPack}
+          onClose={() => setThemeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && (
+        <BackupModal onClose={() => setBackupModalOpen(false)} />
+      )}
+
+      {themeOfferOpen && (
+        <div className="modal-overlay" onClick={() => setThemeOfferOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="reflection-header">
+              <div className="day-detail-emoji" style={{ border: "2px solid var(--accent-1)", filter: "none" }}>
+                🎉
+              </div>
+              <div>
+                <h2 className="reflection-title" style={{ color: "var(--accent-1)" }}>
+                  {THEME_UNLOCK_STREAK}-day streak!
+                </h2>
+                <p className="reflection-subtitle">
+                  Nice work staying consistent. Check out the sky packs to celebrate.
+                </p>
+              </div>
+            </div>
+            <div className="modal-buttons">
+              <button className="btn btn-secondary" onClick={() => setThemeOfferOpen(false)}>Not now</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => { setThemeOfferOpen(false); openThemeModal(); }}
+              >
+                See skies
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {celebration && (
+        <>
+          <StarBurst />
+          <div className="milestone-banner">🎉 {celebration.milestone}-day streak!</div>
+        </>
+      )}
+
+      {reminderBanner && (
+        <div className="milestone-banner reminder-banner">✨ Don't forget to log today's mood</div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

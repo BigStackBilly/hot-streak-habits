@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Daily Line</title>
+<meta name="theme-color" content="#4F46E5" />
+
+<!-- Fonts: Fraunces (a warm display serif) for the streak number/headings —
+     gives this a "handwritten journal" feel distinct from a typical app —
+     and Inter for body text, same workhorse as the sibling app. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Daily Line" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed — see the sibling app's README for why this has
+     to stay inline rather than a separate app.js (file:// can't fetch it). -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// DAILY LINE — a one-line-a-day micro-journal
+//
+// Same philosophy as the sibling "Hot Streak Habits" app in this repo:
+// local-first, zero login, zero backend, inline Babel script so the app
+// opens directly as a file:// URL with no build step. See that app's
+// README for the full rationale (single-file-inline, streak math
+// approach, cosmetic-pack pattern, native wrapping) — this app reuses
+// those same conventions.
+//
+// Organized top to bottom as:
+//   1. Date helpers        - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Streak math          - pure functions, no React
+//   3. localStorage helpers - load/save entries, theme, cosmetics
+//   4. Prompt bank & packs  - the rotating daily prompt + unlockable packs
+//   5. Small components     - Confetti, MoodPicker
+//   6. TodayCard            - today's prompt + one-line entry + save
+//   7. CalendarHeatmap      - month grid of past entries
+//   8. EntryViewModal       - reading a past day's line
+//   9. ShopModal            - prompt packs + the Pro export stub
+//   10. BackupModal          - free full-data backup/restore (not gated)
+//   11. App                 - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect } = React;
+
+const STORAGE_KEY = "dailyline.entries.v1";
+const THEME_KEY = "dailyline.theme.v1";
+const COSMETICS_KEY = "dailyline.cosmetics.v1";
+const PROMPT_OFFSET_KEY = "dailyline.promptOffset.v1";
+const MILESTONES = [7, 30, 100];
+const MAX_LEN = 160;
+
+const MOOD_CHOICES = ["🤩", "😊", "🙂", "😐", "😔", "😣"];
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// Same reasoning as the sibling app: build "YYYY-MM-DD" manually from
+// getFullYear/getMonth/getDate (local time) rather than
+// date.toISOString() (which converts to UTC first and can silently
+// shift a late-evening entry onto the wrong calendar day).
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Number of days from keyA to keyB (positive if keyB is later).
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+// Day-of-year (1-366), used to pick a deterministic prompt for a given
+// date so the prompt stays stable across reloads on the same day but
+// still rotates day to day.
+function dayOfYear(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const start = Date.UTC(y, 0, 1);
+  const cur = Date.UTC(y, m - 1, d);
+  return Math.round((cur - start) / 86400000) + 1;
+}
+
+// ---------------------------------------------------------------------
+// 2. STREAK MATH
+//
+// entries is a { "YYYY-MM-DD": {...} } map; the only thing that matters
+// for streaks is which keys exist. Like the sibling app, nothing here is
+// stored as its own "currentStreak" number — it's derived fresh from the
+// entry dates every render so it can never drift out of sync with what
+// was actually written. Unlike the sibling app there's no per-habit
+// "plan" — a journal entry is either written today or it isn't, so the
+// allowed gap is always exactly 1 day.
+// ---------------------------------------------------------------------
+
+function getCurrentStreak(entryKeys) {
+  if (entryKeys.length === 0) return 0;
+
+  const sortedKeys = [...new Set(entryKeys)].sort();
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const daysSinceLast = daysBetween(lastKey, todayKey());
+
+  // More than a day has passed since the last entry with nothing written
+  // in between -> yesterday was missed, the streak already broke. (If
+  // daysSinceLast is 0 the last entry was today; if it's 1, yesterday's
+  // entry is what's keeping the streak alive and there's still time today.)
+  if (daysSinceLast > 1) return 0;
+
+  let streak = 1;
+  for (let i = sortedKeys.length - 1; i > 0; i--) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    if (gap > 1) break;
+    streak++;
+  }
+  return streak;
+}
+
+function getLongestStreak(entryKeys) {
+  if (entryKeys.length === 0) return 0;
+
+  const sortedKeys = [...new Set(entryKeys)].sort();
+  let longest = 1;
+  let run = 1;
+
+  for (let i = 1; i < sortedKeys.length; i++) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    run = gap === 1 ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+
+  return longest;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadEntries() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveEntries(entries) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { purchased: ["general"], activePack: "general", shopViewed: false, pro: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+// Tracks a one-day "skip" offset so tapping the shuffle button cycles to
+// another prompt without it snapping back on every re-render, but still
+// resets automatically once the calendar day rolls over.
+function loadPromptOffset() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROMPT_OFFSET_KEY));
+    if (raw && raw.date) return raw;
+  } catch {}
+  return { date: todayKey(), offset: 0 };
+}
+
+function savePromptOffset(state) {
+  localStorage.setItem(PROMPT_OFFSET_KEY, JSON.stringify(state));
+}
+
+// ---------------------------------------------------------------------
+// 4. PROMPT BANK & PACKS
+//
+// GENERAL_PROMPTS is the free rotating bank (~30 prompts) shown by
+// default. The paid packs below follow the exact same shape/pattern as
+// the sibling app's THEME_PACKS + ThemeModal — a single "active" pack at
+// a time, purchase just adds an id to `purchased` and sets it active,
+// no real payment processor wired in (see ShopModal's footer note).
+// Prompts are inspiration only, never mandatory to answer literally.
+// ---------------------------------------------------------------------
+
+const GENERAL_PROMPTS = [
+  "What went well today?",
+  "What made you smile today?",
+  "What's one thing you're grateful for right now?",
+  "What's something you learned today?",
+  "Who made your day a little better?",
+  "What was the best part of today?",
+  "What's a small win you had today?",
+  "What are you looking forward to tomorrow?",
+  "What challenged you today, and how did you handle it?",
+  "What's something beautiful you noticed today?",
+  "What's one thing you'd do differently today?",
+  "What gave you energy today?",
+  "What drained your energy today?",
+  "What's a moment you want to remember from today?",
+  "What did you do today that felt like \"you\"?",
+  "What's something kind you did or received today?",
+  "What surprised you today?",
+  "What's one word for how today felt?",
+  "What are you proud of from today?",
+  "What's something you're curious about right now?",
+  "Who do you want to thank today?",
+  "What did today teach you about yourself?",
+  "What's one thing you can let go of tonight?",
+  "What made today different from yesterday?",
+  "What's a small comfort you enjoyed today?",
+  "What's something you almost forgot about today?",
+  "Where did you find a moment of calm today?",
+  "What's one thing your future self might want to know about today?",
+  "What's a habit or choice you're glad you made today?",
+  "What would make tomorrow even better?",
+];
+
+const GRATITUDE_PROMPTS = [
+  "Name three small things you're grateful for right now.",
+  "What's something ordinary that you'd miss if it were gone?",
+  "Who in your life are you quietly thankful for today?",
+  "What's a comfort you often take for granted?",
+  "What part of your body are you grateful worked well today?",
+  "What's something free that made today better?",
+  "What's a memory you're grateful to have?",
+  "What's something about where you live that you appreciate?",
+  "What skill are you grateful you have?",
+  "What's a piece of good luck you've had recently?",
+  "What's something about your health you're thankful for?",
+  "Who taught you something you're grateful to know?",
+];
+
+const CAREER_PROMPTS = [
+  "What's one thing that moved your work forward today?",
+  "What's a skill you used well today?",
+  "What's something you'd like to get better at?",
+  "What did you learn about how you work best today?",
+  "What's a piece of feedback that's stuck with you?",
+  "What's a decision at work you feel good about?",
+  "Who at work are you grateful for right now?",
+  "What's a problem you solved today, big or small?",
+  "What would make tomorrow's work easier?",
+  "What's a goal you're quietly working toward?",
+  "What's something you did today that your future self will thank you for?",
+  "What's one thing you want to say no to more often?",
+];
+
+const RELATIONSHIPS_PROMPTS = [
+  "Who made you feel understood today?",
+  "What's a conversation that stuck with you today?",
+  "Who do you want to check in on soon?",
+  "What's something you appreciate about someone close to you?",
+  "When did you feel most connected to someone today?",
+  "What's a relationship you'd like to invest more in?",
+  "Who could use some encouragement from you this week?",
+  "What's something you learned from someone today?",
+  "What's a small kindness someone showed you recently?",
+  "Who do you laugh with the most?",
+  "What's something you wish you'd said to someone today?",
+  "Who are you looking forward to seeing again?",
+];
+
+const PROMPT_PACKS = [
+  { id: "general", name: "General", free: true, prompts: GENERAL_PROMPTS },
+  { id: "gratitude", name: "Gratitude", price: "$1.99", prompts: GRATITUDE_PROMPTS },
+  { id: "career", name: "Career & Growth", price: "$1.99", prompts: CAREER_PROMPTS },
+  { id: "relationships", name: "Relationships", price: "$1.99", prompts: RELATIONSHIPS_PROMPTS },
+];
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+// A short burst of falling colored rectangles, purely CSS-driven — same
+// technique as the sibling app, recolored to this app's line/dot accents.
+function Confetti() {
+  const colors = ["#4F46E5", "#06B6D4", "#FDB94E", "#FB7185", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. TODAY CARD — the prompt + one-line entry box + save button
+//
+// `key={todayKey()}` on the parent's usage of this component resets its
+// local text/mood state automatically if the app is left open across
+// midnight, so a half-typed line from "yesterday" never gets silently
+// attributed to a new day.
+// ---------------------------------------------------------------------
+
+function TodayCard({ pack, prompt, entryForToday, onSkip, onSave }) {
+  const [text, setText] = useState(entryForToday ? entryForToday.text : "");
+  const [mood, setMood] = useState(entryForToday ? entryForToday.mood : null);
+
+  function handleSave() {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    onSave(trimmed, mood);
+  }
+
+  const remaining = MAX_LEN - text.length;
+
+  return (
+    <div className="today-card">
+      <div className="prompt-row">
+        <div className="prompt-text">
+          <span className="pack-chip">{pack.name}</span>
+          <p>{prompt}</p>
+        </div>
+        <button className="skip-btn" onClick={onSkip} aria-label="Try another prompt" title="Try another prompt">
+          🔀
+        </button>
+      </div>
+
+      <div className="mood-row">
+        {MOOD_CHOICES.map((m) => (
+          <button
+            key={m}
+            className={`mood-option ${mood === m ? "selected" : ""}`}
+            onClick={() => setMood(mood === m ? null : m)}
+            aria-label={`Mood ${m}`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+
+      <input
+        className="line-input"
+        type="text"
+        placeholder="Write your one line for today…"
+        value={text}
+        maxLength={MAX_LEN}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="line-input-footer">
+        <span className="char-count">{remaining} left</span>
+        {entryForToday && <span className="saved-hint">✓ saved for today</span>}
+      </div>
+
+      <div className="save-bar">
+        <button className="btn-save" disabled={!text.trim()} onClick={handleSave}>
+          {entryForToday ? "✓ Update today's line" : "Save today's line"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. CALENDAR HEATMAP
+//
+// A month grid, one cell per day. Days with an entry are filled with the
+// accent gradient; the fill's opacity scales gently with how long that
+// day's line was (capped), giving a soft "more written = more filled"
+// heatmap feel without needing a second data dimension. Tapping a filled
+// day opens EntryViewModal to read it back.
+// ---------------------------------------------------------------------
+
+function CalendarHeatmap({ entries, monthCursor, onChangeMonth, onSelectDay }) {
+  const year = monthCursor.getFullYear();
+  const month = monthCursor.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayK = todayKey();
+  const monthLabel = monthCursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const now = new Date();
+  const realMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const canGoNext = monthCursor < realMonthStart;
+
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const hasAnyEntries = Object.keys(entries).length > 0;
+
+  return (
+    <div className="calendar-card">
+      <div className="calendar-header">
+        <button className="cal-nav" onClick={() => onChangeMonth(-1)} aria-label="Previous month">‹</button>
+        <span className="calendar-title">{monthLabel}</span>
+        <button className="cal-nav" onClick={() => onChangeMonth(1)} disabled={!canGoNext} aria-label="Next month">›</button>
+      </div>
+
+      <div className="calendar-weekdays">
+        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+          <span key={i}>{d}</span>
+        ))}
+      </div>
+
+      <div className="calendar-grid">
+        {cells.map((day, idx) => {
+          if (day === null) return <div className="cal-cell empty" key={`e${idx}`} />;
+          const key = toDateKey(new Date(year, month, day));
+          const entry = entries[key];
+          const isToday = key === todayK;
+          const isFuture = key > todayK;
+          const intensity = entry ? Math.min(1, Math.max(0.35, entry.text.length / 60)) : 0;
+
+          return (
+            <button
+              key={key}
+              className={`cal-cell ${entry ? "has-entry" : ""} ${isToday ? "today" : ""} ${isFuture ? "future" : ""}`}
+              style={entry ? { "--fill-opacity": intensity } : undefined}
+              disabled={!entry}
+              onClick={() => entry && onSelectDay(key)}
+            >
+              <span className="cal-day-num">{day}</span>
+              {entry && entry.mood && <span className="cal-mood">{entry.mood}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {!hasAnyEntries && (
+        <p className="calendar-empty-hint">No lines yet — write today's above and it'll show up here.</p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. ENTRY VIEW MODAL — reading a past day's line
+// ---------------------------------------------------------------------
+
+function EntryViewModal({ dateKey, entry, onClose }) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const label = new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="entry-view-header">
+          {entry.mood && <div className="entry-view-mood">{entry.mood}</div>}
+          <div>
+            <h2 className="entry-view-date">{label}</h2>
+            {entry.prompt && <p className="entry-view-prompt">“{entry.prompt}”</p>}
+          </div>
+        </div>
+        <p className="entry-view-text">{entry.text}</p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. SHOP MODAL — prompt packs + the Pro export stub
+//
+// Same pattern as the sibling app's ThemeModal: every pack is visible
+// and purchasable from day one, purchasing just adds the id to
+// `purchased` and makes it active, and the footer note is upfront that
+// no real payment processor is wired in yet. The Pro section below it
+// follows the same "local state only" stub for a single feature
+// (exporting entries as text) instead of a cosmetic reskin.
+// ---------------------------------------------------------------------
+
+function ShopModal({ cosmetics, onPurchasePack, onSelectPack, onPurchasePro, onExport, entryCount, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Prompt packs</h2>
+        <div className="pack-grid">
+          {PROMPT_PACKS.map((pack) => {
+            const owned = cosmetics.purchased.includes(pack.id);
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`pack-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelectPack(pack.id) : onPurchasePack(pack.id))}
+              >
+                <span className="pack-swatch" aria-hidden="true">✎</span>
+                <span className="pack-name">{pack.name}</span>
+                <span className="pack-status">
+                  {active ? "Active" : owned ? "Owned" : `Unlock · ${pack.price}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <h2 className="pro-heading">Daily Line Pro</h2>
+        <div className="pro-card">
+          <div className="pro-card-text">
+            <span className="pro-title">Export your entries</span>
+            <span className="pro-subtitle">
+              {entryCount === 0
+                ? "Download every line you've written as a plain text file."
+                : `Download all ${entryCount} of your lines as a plain text file.`}
+            </span>
+          </div>
+          {cosmetics.pro ? (
+            <button className="btn btn-secondary pro-btn" disabled={entryCount === 0} onClick={onExport}>
+              Export
+            </button>
+          ) : (
+            <button className="btn btn-primary pro-btn" onClick={onPurchasePro}>
+              Unlock · $2.99
+            </button>
+          )}
+        </div>
+
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 10. BACKUP MODAL — full local-data backup/restore
+//
+// Deliberately separate from ShopModal/Pro — losing every entry with no
+// recovery path is a trust problem, not a monetization opportunity, so
+// this stays free for everyone regardless of `cosmetics.pro`. Download
+// mirrors handleExport's Blob/createObjectURL/anchor-click pattern but
+// bundles the raw localStorage values (not a human-readable export) so
+// restoring writes the exact same keys back. Restore reads the file
+// client-side only (FileReader) — nothing is ever uploaded anywhere.
+// ---------------------------------------------------------------------
+
+function BackupModal({ entryCount, onDownload, onRestore, onClose }) {
+  const [file, setFile] = useState(null);
+  const [error, setError] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
+  function handleFileChange(e) {
+    const picked = e.target.files && e.target.files[0];
+    setFile(picked || null);
+    setError(null);
+    setConfirming(false);
+  }
+
+  function handleRestoreClick() {
+    if (!file) return;
+    setError(null);
+    setConfirming(true);
+  }
+
+  function handleConfirmRestore() {
+    if (!file) return;
+    setRestoring(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("Couldn't read that file — make sure it's an unedited Daily Line backup.");
+        setRestoring(false);
+        setConfirming(false);
+        return;
+      }
+      if (!parsed || parsed.app !== "dailyline" || typeof parsed.data !== "object" || !parsed.data) {
+        setError("That doesn't look like a Daily Line backup file.");
+        setRestoring(false);
+        setConfirming(false);
+        return;
+      }
+      onRestore(parsed.data);
+      // onRestore reloads the page on success, so no need to reset state here.
+    };
+    reader.onerror = () => {
+      setError("Couldn't read that file.");
+      setRestoring(false);
+      setConfirming(false);
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+
+        <div className="pro-card">
+          <div className="pro-card-text">
+            <span className="pro-title">Download backup</span>
+            <span className="pro-subtitle">
+              {entryCount === 0
+                ? "Save a copy of your settings to a file."
+                : `Save all ${entryCount} of your lines, streaks, and settings to a file.`}
+            </span>
+          </div>
+          <button className="btn btn-secondary pro-btn" onClick={onDownload}>
+            Download
+          </button>
+        </div>
+
+        <div className="backup-restore-block">
+          <span className="pro-title">Restore from backup</span>
+          <span className="pro-subtitle">Choose a Daily Line backup (.json) file to bring your entries back.</span>
+
+          <input
+            type="file"
+            accept="application/json,.json"
+            className="backup-file-input"
+            onChange={handleFileChange}
+          />
+
+          {error && <p className="backup-error">{error}</p>}
+
+          {confirming ? (
+            <div className="backup-confirm">
+              <p className="backup-confirm-text">This will replace everything currently on this device. Continue?</p>
+              <div className="modal-buttons">
+                <button className="btn btn-secondary" disabled={restoring} onClick={() => setConfirming(false)}>
+                  Cancel
+                </button>
+                <button className="btn btn-primary" disabled={restoring} onClick={handleConfirmRestore}>
+                  {restoring ? "Restoring…" : "Yes, replace"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn btn-secondary" disabled={!file} onClick={handleRestoreClick}>
+              Restore from backup
+            </button>
+          )}
+        </div>
+
+        <p className="theme-note">
+          Free, always — this is your data, not a premium feature. Nothing leaves your device.
+        </p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 11. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [entries, setEntries] = useState(loadEntries);
+  const [theme, setTheme] = useState(loadTheme);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [viewDayKey, setViewDayKey] = useState(null);
+  const [monthCursor, setMonthCursor] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [promptOffsetState, setPromptOffsetState] = useState(loadPromptOffset);
+  const [celebration, setCelebration] = useState(null); // milestone number | null
+  const [toast, setToast] = useState(null); // string | null
+
+  useEffect(() => {
+    saveEntries(entries);
+  }, [entries]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+  }, [cosmetics]);
+
+  const todayK = todayKey();
+  const entryKeys = Object.keys(entries);
+  const currentStreak = getCurrentStreak(entryKeys);
+  const longestStreak = getLongestStreak(entryKeys);
+  const entryForToday = entries[todayK] || null;
+  // Gentle, not naggy: a streak that broke just shows as 0 with a quiet
+  // explanatory note next to it — no interruption, no guilt-tripping
+  // dialog to click through before you can write again.
+  const streakJustReset = currentStreak === 0 && longestStreak > 0 && !entryForToday;
+
+  const activePack = PROMPT_PACKS.find((p) => p.id === cosmetics.activePack) || PROMPT_PACKS[0];
+  const offset = promptOffsetState.date === todayK ? promptOffsetState.offset : 0;
+  const promptIndex = ((dayOfYear(todayK) + offset) % activePack.prompts.length + activePack.prompts.length) % activePack.prompts.length;
+  const todayPrompt = activePack.prompts[promptIndex];
+
+  function handleSkipPrompt() {
+    setPromptOffsetState((prev) => {
+      const base = prev.date === todayK ? prev.offset : 0;
+      const next = { date: todayK, offset: base + 1 };
+      savePromptOffset(next);
+      return next;
+    });
+  }
+
+  function handleSaveEntry(text, mood) {
+    const wasNewDay = !entries[todayK];
+    const updated = {
+      ...entries,
+      [todayK]: { text, mood, prompt: todayPrompt, updatedAt: new Date().toISOString() },
+    };
+    setEntries(updated);
+
+    if (wasNewDay) {
+      const newStreak = getCurrentStreak(Object.keys(updated));
+      setToast(`Saved — ${newStreak} day${newStreak === 1 ? "" : "s"} in a row.`);
+      if (MILESTONES.includes(newStreak)) {
+        setCelebration(newStreak);
+        setTimeout(() => setCelebration(null), 2200);
+      }
+    } else {
+      setToast("Updated today's line.");
+    }
+    setTimeout(() => setToast(null), 2600);
+  }
+
+  function handleChangeMonth(delta) {
+    setMonthCursor((prev) => new Date(prev.getFullYear(), prev.getMonth() + delta, 1));
+  }
+
+  function handlePurchasePack(id) {
+    setCosmetics((prev) => ({
+      ...prev,
+      purchased: prev.purchased.includes(id) ? prev.purchased : [...prev.purchased, id],
+      activePack: id,
+    }));
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+
+  function handlePurchasePro() {
+    setCosmetics((prev) => ({ ...prev, pro: true }));
+  }
+
+  function openShop() {
+    setShopOpen(true);
+    setCosmetics((prev) => (prev.shopViewed ? prev : { ...prev, shopViewed: true }));
+  }
+
+  // Pro export stub: bundles every saved line into a plain text file and
+  // triggers a normal browser download. Entirely local — nothing is sent
+  // anywhere, matching the rest of the app.
+  function handleExport() {
+    const keys = Object.keys(entries).sort();
+    if (keys.length === 0) return;
+    const lines = keys.map((k) => {
+      const e = entries[k];
+      return `${k}${e.mood ? " " + e.mood : ""} — ${e.text}`;
+    });
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `daily-line-export-${todayK}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Backup: bundles the raw values of every dailyline.* localStorage key
+  // (not just entries — theme/cosmetics/prompt-offset too) into one JSON
+  // file and triggers a normal browser download. Free for everyone; this
+  // is data recovery, not a Pro feature. See handleExport above for the
+  // same download pattern applied to the human-readable text export.
+  function handleDownloadBackup() {
+    const data = {};
+    [STORAGE_KEY, THEME_KEY, COSMETICS_KEY, PROMPT_OFFSET_KEY].forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+    const payload = { app: "dailyline", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `daily-line-backup-${todayK}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Writes every key from a validated backup file straight back into
+  // localStorage, then reloads so every piece of React state (entries,
+  // theme, cosmetics, prompt offset) re-hydrates from the restored
+  // storage rather than trying to patch live state in place.
+  function handleRestoreBackup(data) {
+    Object.keys(data).forEach((key) => {
+      localStorage.setItem(key, data[key]);
+    });
+    window.location.reload();
+  }
+
+  const viewEntry = viewDayKey ? entries[viewDayKey] : null;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="app-title-mark" aria-hidden="true">―</span> Daily Line
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={openShop} aria-label="Prompt packs & Pro">
+            🎁
+            {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupOpen(true)} aria-label="Backup & Restore">
+            💾
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      <div className="streak-row">
+        <div className="streak-block">
+          <span className="streak-num">{currentStreak}</span>
+          <span className="streak-label">day{currentStreak === 1 ? "" : "s"} in a row</span>
+        </div>
+        <div className="streak-best">🏆 best: {longestStreak}</div>
+      </div>
+
+      {streakJustReset && (
+        <p className="streak-reset-note">
+          Your streak reset — no worries. Write today's line to start a new one.
+        </p>
+      )}
+
+      <TodayCard
+        key={todayK}
+        pack={activePack}
+        prompt={todayPrompt}
+        entryForToday={entryForToday}
+        onSkip={handleSkipPrompt}
+        onSave={handleSaveEntry}
+      />
+
+      <CalendarHeatmap
+        entries={entries}
+        monthCursor={monthCursor}
+        onChangeMonth={handleChangeMonth}
+        onSelectDay={setViewDayKey}
+      />
+
+      {viewEntry && (
+        <EntryViewModal dateKey={viewDayKey} entry={viewEntry} onClose={() => setViewDayKey(null)} />
+      )}
+
+      {shopOpen && (
+        <ShopModal
+          cosmetics={cosmetics}
+          onPurchasePack={handlePurchasePack}
+          onSelectPack={handleSelectPack}
+          onPurchasePro={handlePurchasePro}
+          onExport={handleExport}
+          entryCount={entryKeys.length}
+          onClose={() => setShopOpen(false)}
+        />
+      )}
+
+      {backupOpen && (
+        <BackupModal
+          entryCount={entryKeys.length}
+          onDownload={handleDownloadBackup}
+          onRestore={handleRestoreBackup}
+          onClose={() => setBackupOpen(false)}
+        />
+      )}
+
+      {celebration && (
+        <>
+          <Confetti />
+          <div className="milestone-banner">🎉 {celebration}-day streak!</div>
+        </>
+      )}
+
+      {toast && <div className="milestone-banner toast-banner">{toast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app. Silently no-ops over file:// or plain http, since
+  // both require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

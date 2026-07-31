@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Routine Runner</title>
+<meta name="theme-color" content="#4F46E5" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts the sibling Hot Streak Habits app uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Routines" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// ROUTINE RUNNER — a small local-first, step-by-step routine timer
+//
+// Sibling app to Hot Streak Habits, same house style: this lives inline
+// in index.html (rather than a separate app.js) so the app can be opened
+// directly as a file:// URL with zero server/build step — the in-browser
+// Babel transformer can't fetch a separate local script file over
+// file://, but it can transform a script that's already inline.
+//
+// Organized top to bottom as:
+//   1. Date helpers        - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Streak math          - pure functions, no React, easy to test by hand
+//   3. localStorage helpers - load/save routines, theme, pro, reminders
+//   4. Small presentational components (EmptyState, WeekDots, Confetti...)
+//   5. RoutineCard           - one routine's row in the list
+//   6. RoutineBuilderModal   - the bottom-sheet form for creating/editing
+//   6b. UpgradeModal         - the "Pro" paywall (see "Monetization" below)
+//   7. RunView               - the full-screen guided step-through
+//   8. App                   - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const STORAGE_KEY = "routines.routines.v1";
+const THEME_KEY = "routines.theme.v1";
+const PRO_KEY = "routines.pro.v1";
+const NOTIF_KEY = "routines.notifsEnabled.v1";
+const NOTIFIED_TODAY_KEY = "routines.notifiedToday.v1";
+const MILESTONES = [7, 30, 100];
+const MAX_FREE_ROUTINES = 2;
+const PRO_PRICE = "$3.99";
+
+const EMOJI_CHOICES = [
+  "🌅", "🌙", "🧴", "🦷", "🧘", "💪",
+  "📚", "🍳", "🚿", "✅", "🧹", "🎒",
+  "💧", "🧠", "🐶", "📵", "🎯", "☕",
+  "🛏️", "🧺", "🧦", "🕯️", "📓", "🚰",
+];
+
+const STEP_TIMER_PRESETS = [15, 30, 60, 120];
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// We store each completed day as a "YYYY-MM-DD" string in the user's
+// LOCAL timezone. We deliberately do NOT use `date.toISOString()`
+// anywhere here, because toISOString() converts to UTC first — for
+// anyone west of Greenwich, finishing a routine at 9pm could silently
+// get recorded as "tomorrow". Building the string manually from
+// getFullYear/getMonth/getDate keeps it anchored to the user's actual
+// calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function addDays(date, delta) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + delta);
+  return copy;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Add `delta` days to a "YYYY-MM-DD" key and return a new key. Goes via a
+// local Date built from the individual Y/M/D numbers (not `new Date(key)`,
+// which parses as UTC midnight and can land on the wrong local day) so this
+// stays consistent with toDateKey().
+function keyPlusDays(key, delta) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + delta);
+  return toDateKey(date);
+}
+
+// Number of days from keyA to keyB (positive if keyB is later).
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+// ---------------------------------------------------------------------
+// 2. STREAK MATH
+//
+// A routine's "completedDates" is just an array of date-key strings —
+// the days every step in the routine was run start to finish. Everything
+// else (current streak, longest streak, this week's dots) is *derived*
+// from that array every render instead of being stored, same philosophy
+// as Hot Streak Habits: there's only one source of truth, so the streak
+// number can never drift out of sync with what actually happened.
+//
+// Unlike Hot Streak, routines don't have a configurable "every N days"
+// plan — a routine (morning/bedtime/etc.) is inherently a daily thing —
+// so the interval is always 1 day. Missing a day really does break the
+// streak; there's no forgiveness built in, on purpose.
+// ---------------------------------------------------------------------
+
+function getCurrentStreak(completedDates) {
+  if (completedDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(completedDates)].sort();
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const daysSinceLast = daysBetween(lastKey, todayKey());
+
+  // More than 1 day has gone by since the last run with nothing logged
+  // -> yesterday was skipped, so the streak is already broken.
+  if (daysSinceLast > 1) return 0;
+
+  let streak = 1;
+  for (let i = sortedKeys.length - 1; i > 0; i--) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    if (gap > 1) break;
+    streak++;
+  }
+  return streak;
+}
+
+function getLongestStreak(completedDates) {
+  if (completedDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(completedDates)].sort();
+  let longest = 1;
+  let run = 1;
+
+  for (let i = 1; i < sortedKeys.length; i++) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    run = gap <= 1 ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+
+  return longest;
+}
+
+// When is this routine next due, and is today the day (or already gone
+// overdue)? Used for the "due today" badge, the week dots, and the
+// reminder buzzer.
+function getDueInfo(routine) {
+  const todayK = todayKey();
+  const sortedKeys = [...new Set(routine.completedDates)].sort();
+
+  if (sortedKeys.length === 0) {
+    return { dueKey: todayK, isDoneToday: false, isDueToday: true, isOverdue: false };
+  }
+
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const dueKey = keyPlusDays(lastKey, 1);
+  const isDoneToday = sortedKeys.includes(todayK);
+  const gap = daysBetween(dueKey, todayK); // today - due, in days
+
+  return {
+    dueKey,
+    isDoneToday,
+    isDueToday: !isDoneToday && gap === 0,
+    isOverdue: !isDoneToday && gap > 0,
+  };
+}
+
+// Last 7 days (oldest -> newest, today last) as
+// {key, label, isToday, status}, where status is one of:
+//   "hit"     - run to completion that day
+//   "due"     - today, not run yet
+//   "missed"  - a past due date that passed with nothing logged — the day
+//               that actually broke the streak
+//
+// Today's status is pulled from getDueInfo() rather than recomputed
+// separately, so the week dot for today can never disagree with the badge
+// on the card above it.
+function getWeekData(routine) {
+  const dateSet = new Set(routine.completedDates);
+  const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
+  const todayK = todayKey();
+  const due = getDueInfo(routine);
+  const days = [];
+
+  for (let offset = 6; offset >= 0; offset--) {
+    const d = addDays(new Date(), -offset);
+    const key = toDateKey(d);
+    let status = "neutral";
+
+    if (dateSet.has(key)) {
+      status = "hit";
+    } else if (key === todayK) {
+      status = due.isDueToday || due.isOverdue ? "due" : "neutral";
+    } else if (key > (routine.createdAt || "")) {
+      // Any day after the routine existed, with nothing logged, was missed.
+      status = "missed";
+    }
+
+    days.push({ key, label: dayLabels[d.getDay()], status, isToday: key === todayK });
+  }
+  return days;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadRoutines() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRoutines(routines) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(routines));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function savePro(pro) {
+  localStorage.setItem(PRO_KEY, JSON.stringify(pro));
+}
+
+function loadNotifsEnabled() {
+  return localStorage.getItem(NOTIF_KEY) === "1";
+}
+
+// Tracks the last date (per routine) we already buzzed for, so reopening
+// the app or a periodic recheck doesn't re-buzz you every few minutes.
+function loadNotifiedMap() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTIFIED_TODAY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNotifiedMap(map) {
+  localStorage.setItem(NOTIFIED_TODAY_KEY, JSON.stringify(map));
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A short two-beep buzzer using the Web Audio API directly — no audio file
+// to ship, works offline, and is enough to notice without being jarring.
+function playBuzzer() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18].forEach((startAt) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 660;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.16);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.18);
+    });
+  } catch {
+    // Web Audio isn't available (or blocked until a user gesture) — the
+    // in-app banner and OS notification still get the point across.
+  }
+}
+
+// A quieter single tick, used for the per-step countdown's final beep
+// inside a run (distinct from the due-today buzzer above).
+function playTick() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.2);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.2);
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ onAdd }) {
+  return (
+    <div className="empty-state">
+      <div className="emoji">🏁</div>
+      <h2>No routines yet</h2>
+      <p>Build a routine — a morning or bedtime checklist — and run through it step by step.</p>
+      <button className="btn btn-primary" style={{ padding: "14px 28px" }} onClick={onAdd}>
+        + Build your first routine
+      </button>
+    </div>
+  );
+}
+
+const DAY_ICONS = { hit: "✓", due: "!", missed: "✕" };
+
+function WeekDots({ routine }) {
+  const days = getWeekData(routine);
+  return (
+    <div className="week-row">
+      {days.map((day) => (
+        <div className="week-day" key={day.key}>
+          <span className="week-day-label">{day.label}</span>
+          <div className={`week-dot ${day.status} ${day.isToday ? "today" : ""}`}>
+            {DAY_ICONS[day.status] || ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// A short burst of falling colored rectangles, purely CSS-driven. Not a
+// real physics sim — just enough motion to feel celebratory without
+// pulling in a confetti library for one animation.
+function Confetti() {
+  const colors = ["#4F46E5", "#10B981", "#22D3EE", "#F59E0B", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. ROUTINE CARD
+// ---------------------------------------------------------------------
+
+function RoutineCard({ routine, onStart, onEdit, onDelete, onToggleReminders }) {
+  const currentStreak = getCurrentStreak(routine.completedDates);
+  const longestStreak = getLongestStreak(routine.completedDates);
+  const doneToday = routine.completedDates.includes(todayKey());
+  const due = getDueInfo(routine);
+  const stepCount = routine.steps.length;
+
+  return (
+    <div className="routine-card">
+      <div className="routine-top-row">
+        <button className="routine-tap-area" onClick={() => onEdit(routine)}>
+          <div className={`routine-emoji-ring ${doneToday ? "lit" : ""}`}>{routine.emoji}</div>
+          <div className="routine-info">
+            <div className="routine-name-row">
+              <span className="routine-name">{routine.name}</span>
+              <span className="step-count-chip">{stepCount} step{stepCount === 1 ? "" : "s"}</span>
+            </div>
+            <div className="routine-streak-row">
+              <span className="routine-streak-num">{currentStreak}</span>
+              <span className="routine-streak-label">day{currentStreak === 1 ? "" : "s"} in a row</span>
+              {due.isDueToday && <span className="due-badge">due today</span>}
+            </div>
+            <span className="routine-longest">🏆 best: {longestStreak}</span>
+          </div>
+        </button>
+
+        <div className="routine-actions">
+          <button
+            className="icon-btn"
+            onClick={() => onToggleReminders(routine.id)}
+            aria-label={routine.remindersEnabled === false ? "Turn reminders on" : "Mute reminders"}
+          >
+            {routine.remindersEnabled === false ? "🔕" : "🔔"}
+          </button>
+          <button className="icon-btn" onClick={() => onDelete(routine.id)} aria-label="Delete routine">🗑️</button>
+        </div>
+      </div>
+
+      <WeekDots routine={routine} />
+
+      <button
+        className="btn btn-primary start-btn"
+        disabled={stepCount === 0}
+        onClick={() => onStart(routine)}
+      >
+        {stepCount === 0 ? "Add steps to start" : doneToday ? "▶ Run again" : "▶ Start routine"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. ROUTINE BUILDER MODAL — create/edit a routine and its ordered steps
+// ---------------------------------------------------------------------
+
+function StepRow({ step, index, count, onChange, onRemove, onMove }) {
+  const hasTimer = Boolean(step.seconds);
+
+  return (
+    <div className="step-row">
+      <span className="step-index">{index + 1}</span>
+      <div className="step-row-main">
+        <input
+          className="step-name-input"
+          placeholder="e.g. Brush teeth"
+          value={step.name}
+          maxLength={60}
+          onChange={(e) => onChange({ ...step, name: e.target.value })}
+        />
+        <div className="step-timer-row">
+          <label className="step-timer-toggle">
+            <input
+              type="checkbox"
+              checked={hasTimer}
+              onChange={(e) => onChange({ ...step, seconds: e.target.checked ? 60 : null })}
+            />
+            Timer
+          </label>
+          {hasTimer && (
+            <>
+              <input
+                type="number"
+                className="step-seconds-input"
+                min="5"
+                max="900"
+                value={step.seconds}
+                onChange={(e) => onChange({ ...step, seconds: Math.max(5, Number(e.target.value) || 5) })}
+              />
+              <span className="step-seconds-label">sec</span>
+            </>
+          )}
+        </div>
+        {hasTimer && (
+          <div className="step-preset-row">
+            {STEP_TIMER_PRESETS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`preset-chip ${step.seconds === s ? "selected" : ""}`}
+                onClick={() => onChange({ ...step, seconds: s })}
+              >
+                {s < 60 ? `${s}s` : `${s / 60}m`}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="step-row-controls">
+        <button
+          type="button"
+          className="step-move-btn"
+          disabled={index === 0}
+          onClick={() => onMove(index, -1)}
+          aria-label="Move step up"
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          className="step-move-btn"
+          disabled={index === count - 1}
+          onClick={() => onMove(index, 1)}
+          aria-label="Move step down"
+        >
+          ▼
+        </button>
+        <button type="button" className="step-remove-btn" onClick={onRemove} aria-label="Remove step">
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RoutineBuilderModal({ routine, onSave, onDelete, onClose }) {
+  const isEditing = Boolean(routine);
+  const [name, setName] = useState(routine ? routine.name : "");
+  const [emoji, setEmoji] = useState(routine ? routine.emoji : EMOJI_CHOICES[0]);
+  const [steps, setSteps] = useState(
+    routine ? routine.steps : [{ id: makeId(), name: "", seconds: null }]
+  );
+
+  function updateStep(index, next) {
+    setSteps((prev) => prev.map((s, i) => (i === index ? next : s)));
+  }
+
+  function removeStep(index) {
+    setSteps((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function moveStep(index, delta) {
+    setSteps((prev) => {
+      const next = [...prev];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function addStep() {
+    setSteps((prev) => [...prev, { id: makeId(), name: "", seconds: null }]);
+  }
+
+  const cleanSteps = steps
+    .map((s) => ({ ...s, name: s.name.trim() }))
+    .filter((s) => s.name.length > 0);
+  const canSave = name.trim().length > 0 && cleanSteps.length > 0;
+
+  function handleSave() {
+    if (!canSave) return;
+    if (isEditing) {
+      onSave({ ...routine, name: name.trim(), emoji, steps: cleanSteps });
+    } else {
+      onSave({
+        id: makeId(),
+        name: name.trim(),
+        emoji,
+        steps: cleanSteps,
+        completedDates: [],
+        createdAt: todayKey(),
+      });
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{isEditing ? "Edit routine" : "New routine"}</h2>
+
+        <label className="field-label" htmlFor="routine-name">Name</label>
+        <input
+          id="routine-name"
+          className="name-input"
+          placeholder="e.g. Morning"
+          value={name}
+          maxLength={40}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <label className="field-label">Icon</label>
+        <div className="emoji-grid">
+          {EMOJI_CHOICES.map((e) => (
+            <button
+              key={e}
+              type="button"
+              className={`emoji-option ${emoji === e ? "selected" : ""}`}
+              onClick={() => setEmoji(e)}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label">
+          Steps <span className="field-optional">(in order — this is what you'll run through)</span>
+        </label>
+        <div className="step-list">
+          {steps.map((step, index) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              index={index}
+              count={steps.length}
+              onChange={(next) => updateStep(index, next)}
+              onRemove={() => removeStep(index)}
+              onMove={moveStep}
+            />
+          ))}
+        </div>
+        <button type="button" className="add-step-btn" onClick={addStep}>+ Add step</button>
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!canSave} onClick={handleSave}>
+            {isEditing ? "Save" : "Create routine"}
+          </button>
+        </div>
+
+        {isEditing && (
+          <button
+            className="btn-danger"
+            style={{ width: "100%", marginTop: 10 }}
+            onClick={() => onDelete(routine.id)}
+          >
+            Delete routine
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6b. UPGRADE MODAL — the "Pro" paywall
+//
+// Mirrors Hot Streak Habits' cosmetic theme shop (ThemeModal) pattern:
+// "purchasing" here only flips a local flag and unlocks unlimited
+// routines, with the footer note upfront that real billing isn't wired
+// up yet. Shown either when someone hits the free-tier cap trying to add
+// a 3rd routine, or any time from the crown icon in the header.
+// ---------------------------------------------------------------------
+
+function UpgradeModal({ pro, onPurchase, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Routine Runner Pro</h2>
+
+        {pro.owned ? (
+          <>
+            <p className="upgrade-copy">
+              ✓ Pro is unlocked on this device — thanks for supporting the app! Unlimited routines, no limits.
+            </p>
+            <div className="modal-buttons">
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">
+              The free plan is capped at {MAX_FREE_ROUTINES} routines. Unlock Pro for unlimited routines —
+              build one for mornings, one for bedtime, one for the gym, as many as you need.
+            </p>
+            <ul className="upgrade-list">
+              <li>Unlimited routines (free plan: {MAX_FREE_ROUTINES})</li>
+              <li>Everything else — guided runs, streaks, reminders — stays exactly the same</li>
+              <li>One-time unlock, no subscription</li>
+            </ul>
+            <div className="modal-buttons-column">
+              <button className="btn btn-primary" onClick={() => onPurchase()}>
+                Unlock Pro — {PRO_PRICE}
+              </button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6c. BACKUP MODAL — export/import everything to a local JSON file
+//
+// This is deliberately NOT gated behind Pro/UpgradeModal: losing every
+// routine and streak because a phone was lost or reinstalled is a real
+// trust problem, and locking someone's own data recovery behind a paywall
+// would be predatory. Fully local — reads/writes localStorage directly and
+// triggers a normal browser file download/upload, no network calls, same
+// "nothing leaves your device" promise as privacy.html.
+// ---------------------------------------------------------------------
+
+const BACKUP_KEYS = [STORAGE_KEY, THEME_KEY, PRO_KEY, NOTIF_KEY, NOTIFIED_TODAY_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null); // { type: "error" | "success", text }
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+
+    const payload = { app: "routines", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `routine-runner-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+
+      if (!parsed || parsed.app !== "routines" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Routine Runner backup file." });
+        return;
+      }
+
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+
+      Object.keys(parsed.data).forEach((key) => {
+        localStorage.setItem(key, parsed.data[key]);
+      });
+      window.location.reload();
+    };
+    reader.onerror = () => {
+      setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+
+        <p className="upgrade-copy">
+          Save every routine, streak, and setting to a file on your device — and bring it all back later, even
+          after reinstalling or switching phones.
+        </p>
+
+        <label className="field-label">Download</label>
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: "100%", marginBottom: 18 }}
+          onClick={handleDownload}
+        >
+          ⬇ Download backup
+        </button>
+
+        <label className="field-label">Restore</label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ width: "100%" }}
+          onClick={handleRestoreClick}
+        >
+          ⬆ Restore from backup
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="backup-file-input"
+          onChange={handleFileChange}
+        />
+
+        {status && (
+          <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>
+            {status.text}
+          </p>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">
+          Free, always — this is your data, not a premium feature. Nothing leaves your device.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. RUN VIEW — the full-screen guided step-through
+//
+// Self-contained: given a routine and onComplete/onCancel callbacks, it
+// manages its own current-step index and any per-step countdown. Tapping
+// almost anywhere on a step advances it immediately — the built-in
+// countdown (when a step has one) is a convenience that auto-advances,
+// not a requirement to wait it out. Canceling mid-run never touches the
+// routine's completedDates, so a partial run intentionally does not
+// count toward today's streak.
+// ---------------------------------------------------------------------
+
+function RunView({ routine, onComplete, onCancel }) {
+  const [stepIndex, setStepIndex] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(routine.steps[0].seconds || 0);
+  const [phase, setPhase] = useState("running"); // "running" | "complete"
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+
+  const step = routine.steps[stepIndex];
+  const total = routine.steps.length;
+  const isLastStep = stepIndex === total - 1;
+
+  // Reset (and start) the countdown whenever the step changes.
+  useEffect(() => {
+    setSecondsLeft(routine.steps[stepIndex].seconds || 0);
+  }, [stepIndex]);
+
+  // Tick the countdown for timed steps; auto-advance at zero.
+  useEffect(() => {
+    const current = routine.steps[stepIndex];
+    if (!current.seconds || phase !== "running") return;
+
+    if (secondsLeft <= 0) {
+      playTick();
+      handleAdvance();
+      return;
+    }
+
+    const timer = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [secondsLeft, stepIndex, phase]);
+
+  function handleAdvance() {
+    if (isLastStep) {
+      setPhase("complete");
+      return;
+    }
+    setStepIndex((i) => i + 1);
+  }
+
+  // Auto-return to the list a couple seconds after the completion screen
+  // appears — tapping it (see below) also dismisses immediately.
+  useEffect(() => {
+    if (phase !== "complete") return;
+    const timer = setTimeout(() => onComplete(routine.id), 2200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  if (phase === "complete") {
+    const newStreak = getCurrentStreak([...routine.completedDates, todayKey()]);
+    const isMilestone = MILESTONES.includes(newStreak);
+    return (
+      <div className="run-view run-complete" onClick={() => onComplete(routine.id)}>
+        {isMilestone && <Confetti />}
+        <div className="run-complete-emoji">🎉</div>
+        <h1 className="run-complete-title">Routine complete!</h1>
+        <p className="run-complete-sub">
+          {routine.emoji} {routine.name} — {newStreak} day{newStreak === 1 ? "" : "s"} in a row
+        </p>
+        <p className="run-complete-tap-hint">Tap anywhere to continue</p>
+      </div>
+    );
+  }
+
+  const pct = Math.round((stepIndex / total) * 100);
+  const timerPct = step.seconds ? Math.round(((step.seconds - secondsLeft) / step.seconds) * 100) : 0;
+
+  return (
+    <div className="run-view">
+      <div className="run-header">
+        <button className="run-cancel-btn" onClick={() => setConfirmingCancel(true)} aria-label="Cancel run">✕</button>
+        <div className="run-progress-wrap">
+          <span className="run-progress-label">Step {stepIndex + 1} of {total}</span>
+          <div className="run-progress-track">
+            <div className="run-progress-fill" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
+      </div>
+
+      <button className="run-step-tap-area" onClick={handleAdvance}>
+        <div className="run-step-emoji">{routine.emoji}</div>
+        <h1 className="run-step-name">{step.name}</h1>
+
+        {step.seconds ? (
+          <div className="run-timer-ring" style={{ "--pct": `${timerPct}%` }}>
+            <span className="run-timer-num">{secondsLeft}</span>
+          </div>
+        ) : (
+          <div className="run-manual-hint">Tap to mark done</div>
+        )}
+      </button>
+
+      <div className="run-footer">
+        <button className="btn btn-primary run-advance-btn" onClick={handleAdvance}>
+          {step.seconds ? "Skip ahead" : "✓ Done"}
+        </button>
+      </div>
+
+      {confirmingCancel && (
+        <div className="modal-overlay" onClick={() => setConfirmingCancel(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <h2>End this run?</h2>
+            <p className="upgrade-copy">
+              You're on step {stepIndex + 1} of {total}. Ending now won't count toward today's streak —
+              only a finished routine does.
+            </p>
+            <div className="modal-buttons-column">
+              <button className="btn btn-danger-solid" onClick={onCancel}>End run</button>
+              <button className="btn btn-secondary" onClick={() => setConfirmingCancel(false)}>Keep going</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [routines, setRoutines] = useState(loadRoutines);
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [modalState, setModalState] = useState({ open: false, routine: null });
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [runningRoutineId, setRunningRoutineId] = useState(null);
+  const [notifsEnabled, setNotifsEnabled] = useState(loadNotifsEnabled);
+  const [reminder, setReminder] = useState(null); // routine currently showing a "buzz" banner
+
+  // Persist routines any time they change.
+  useEffect(() => {
+    saveRoutines(routines);
+  }, [routines]);
+
+  // Persist + apply theme.
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  // Persist pro status.
+  useEffect(() => {
+    savePro(pro);
+  }, [pro]);
+
+  // The "buzzer": whenever a routine is due today (i.e. hasn't been run
+  // yet today), fire an in-app banner + beep + vibration, plus a real OS
+  // notification if permission's been granted. Runs on load, whenever the
+  // tab regains focus, and every few minutes while it stays open — there's
+  // no backend here to push a notification while the app is fully closed.
+  // Only ever buzzes ONCE per routine per day (tracked in notifiedMap).
+  // Muted routines (remindersEnabled === false) skip the buzz but keep the
+  // passive visual cue (the due badge / amber week dot), same as Hot
+  // Streak Habits.
+  useEffect(() => {
+    function checkDueRoutines() {
+      const todayK = todayKey();
+      const notifiedMap = loadNotifiedMap();
+      let mapChanged = false;
+
+      routines.forEach((routine) => {
+        const due = getDueInfo(routine);
+        const muted = routine.remindersEnabled === false;
+        if (due.isDueToday && !muted && notifiedMap[routine.id] !== todayK) {
+          buzz(routine);
+          notifiedMap[routine.id] = todayK;
+          mapChanged = true;
+        }
+      });
+
+      if (mapChanged) saveNotifiedMap(notifiedMap);
+    }
+
+    checkDueRoutines();
+    const interval = setInterval(checkDueRoutines, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", checkDueRoutines);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkDueRoutines);
+    };
+  }, [routines, notifsEnabled]);
+
+  function buzz(routine) {
+    playBuzzer();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+    setReminder(routine);
+    setTimeout(() => setReminder((cur) => (cur && cur.id === routine.id ? null : cur)), 5000);
+
+    if (notifsEnabled && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification("🏁 Routine Runner", {
+          body: `${routine.emoji} ${routine.name} is ready to run today!`,
+          icon: "icon-192.png",
+          tag: routine.id,
+        });
+      } catch {
+        // Some browsers (mobile Chrome) require going through a Service
+        // Worker registration instead — the in-app banner still covers it.
+      }
+    }
+  }
+
+  function toggleNotifications() {
+    if (notifsEnabled) {
+      setNotifsEnabled(false);
+      localStorage.setItem(NOTIF_KEY, "0");
+      return;
+    }
+    if (!("Notification" in window)) {
+      setNotifsEnabled(true);
+      localStorage.setItem(NOTIF_KEY, "1");
+      return;
+    }
+    Notification.requestPermission().then((permission) => {
+      const enabled = permission === "granted";
+      setNotifsEnabled(enabled);
+      localStorage.setItem(NOTIF_KEY, enabled ? "1" : "0");
+    });
+  }
+
+  function openAddModal() {
+    if (!pro.owned && routines.length >= MAX_FREE_ROUTINES) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    setModalState({ open: true, routine: null });
+  }
+
+  function openEditModal(routine) {
+    setModalState({ open: true, routine });
+  }
+
+  function closeModal() {
+    setModalState({ open: false, routine: null });
+  }
+
+  function handleSaveRoutine(routine) {
+    setRoutines((prev) => {
+      const exists = prev.some((r) => r.id === routine.id);
+      return exists ? prev.map((r) => (r.id === routine.id ? routine : r)) : [...prev, routine];
+    });
+    closeModal();
+  }
+
+  function handleDeleteRoutine(id) {
+    setRoutines((prev) => prev.filter((r) => r.id !== id));
+    closeModal();
+  }
+
+  function handleToggleReminders(id) {
+    setRoutines((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, remindersEnabled: r.remindersEnabled === false } : r))
+    );
+  }
+
+  function handlePurchasePro() {
+    setPro({ owned: true });
+  }
+
+  function handleStartRun(routine) {
+    setRunningRoutineId(routine.id);
+  }
+
+  function handleRunCancel() {
+    setRunningRoutineId(null);
+  }
+
+  function handleRunComplete(routineId) {
+    const key = todayKey();
+    setRoutines((prev) =>
+      prev.map((r) => {
+        if (r.id !== routineId) return r;
+        if (r.completedDates.includes(key)) return r;
+        return { ...r, completedDates: [...r.completedDates, key] };
+      })
+    );
+    setRunningRoutineId(null);
+  }
+
+  const runningRoutine = routines.find((r) => r.id === runningRoutineId) || null;
+
+  if (runningRoutine) {
+    return (
+      <RunView
+        routine={runningRoutine}
+        onComplete={handleRunComplete}
+        onCancel={handleRunCancel}
+      />
+    );
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🏁</span> Routine Runner
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Routine Runner Pro">
+            {pro.owned ? "⭐" : "👑"}
+          </button>
+          <button className="theme-toggle" onClick={toggleNotifications} aria-label="Toggle reminders">
+            {notifsEnabled ? "🔔" : "🔕"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">
+            💾
+          </button>
+        </div>
+      </header>
+
+      {routines.length === 0 ? (
+        <EmptyState onAdd={openAddModal} />
+      ) : (
+        <div className="routine-list">
+          {routines.map((routine) => (
+            <RoutineCard
+              key={routine.id}
+              routine={routine}
+              onStart={handleStartRun}
+              onEdit={openEditModal}
+              onDelete={handleDeleteRoutine}
+              onToggleReminders={handleToggleReminders}
+            />
+          ))}
+          {!pro.owned && (
+            <p className="free-tier-note">
+              Free plan: {routines.length} of {MAX_FREE_ROUTINES} routines used.{" "}
+              <button className="link-btn" onClick={() => setUpgradeModalOpen(true)}>Go Pro for unlimited</button>
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="fab">
+        <button onClick={openAddModal}>+ Add routine</button>
+      </div>
+
+      {modalState.open && (
+        <RoutineBuilderModal
+          routine={modalState.routine}
+          onSave={handleSaveRoutine}
+          onDelete={handleDeleteRoutine}
+          onClose={closeModal}
+        />
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal
+          pro={pro}
+          onPurchase={handlePurchasePro}
+          onClose={() => setUpgradeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && (
+        <BackupModal onClose={() => setBackupModalOpen(false)} />
+      )}
+
+      {reminder && (
+        <div className="milestone-banner reminder-banner">
+          🔔 {reminder.emoji} {reminder.name} is ready to run today!
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

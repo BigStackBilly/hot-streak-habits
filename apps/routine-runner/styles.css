@@ -1,0 +1,1002 @@
+/* ===================================================================
+   ROUTINE RUNNER — visual identity
+   Cool indigo-to-emerald "run" gradient (motion/progress), reserved for
+   streak numbers, the lit/done state, primary buttons, and the guided
+   run screen — same "earned, not decorative" philosophy as the sibling
+   Hot Streak Habits app's ember palette, just recolored for this app.
+   =================================================================== */
+
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef1f8;
+  --text: #1c2230;
+  --text-dim: #6b7280;
+  --border: #e2e6ef;
+  --shadow: 0 2px 10px rgba(30, 41, 59, 0.08);
+
+  --run-1: #4f46e5;
+  --run-2: #10b981;
+  --run-gradient: linear-gradient(135deg, var(--run-1), var(--run-2));
+  --today-accent: #f59e0b;
+  --danger: #e63946;
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+}
+
+[data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1f232c;
+  --text: #f2f4f8;
+  --text-dim: #9aa1b0;
+  --border: #2a2f3a;
+  --shadow: 0 2px 14px rgba(0, 0, 0, 0.4);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-title .logo {
+  filter: drop-shadow(0 2px 4px rgba(79, 70, 229, 0.35));
+  display: inline-flex;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Empty state ---------- */
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 32px;
+  gap: 10px;
+}
+
+.empty-state .emoji {
+  font-size: 56px;
+  margin-bottom: 6px;
+}
+
+.empty-state h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 22px;
+  margin: 0;
+}
+
+.empty-state p {
+  color: var(--text-dim);
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.empty-state .btn-primary {
+  flex: none;
+}
+
+/* ---------- Routine list ---------- */
+
+.routine-list {
+  flex: 1;
+  padding: 8px 16px 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.routine-card {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+}
+
+.routine-top-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The main tap target: tapping anywhere on the emoji+name+streak area
+   opens the routine for editing. Minimum 44px tall per mobile
+   tap-target guidelines. */
+.routine-tap-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  text-align: left;
+  padding: 4px 0;
+  min-width: 0;
+}
+
+.routine-emoji-ring {
+  width: 50px;
+  height: 50px;
+  min-width: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.routine-emoji-ring.lit {
+  background: var(--run-gradient);
+  border-color: transparent;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);
+}
+
+.routine-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.routine-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.routine-name {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-count-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--run-2);
+  background: color-mix(in srgb, var(--run-2) 15%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.routine-streak-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.due-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--run-1);
+  background: color-mix(in srgb, var(--run-1) 14%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  animation: due-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes due-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.routine-streak-num {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 20px;
+  background: var(--run-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.routine-streak-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.routine-longest {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.routine-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.icon-btn:active {
+  background: var(--surface-2);
+}
+
+.start-btn {
+  width: 100%;
+  min-height: 46px;
+}
+
+/* ---------- Week dots ---------- */
+
+.week-row {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.week-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 30px;
+}
+
+.week-day-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.week-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.week-dot.hit {
+  background: var(--run-gradient);
+  border-color: transparent;
+  color: white;
+}
+
+.week-dot.due {
+  border-color: var(--run-1);
+  color: var(--run-1);
+  font-weight: 800;
+  animation: due-pulse 1.6s ease-in-out infinite;
+}
+
+.week-dot.missed {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.week-dot.today {
+  box-shadow: 0 0 0 2px var(--today-accent);
+}
+
+/* ---------- Free tier note ---------- */
+
+.free-tier-note {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+}
+
+.link-btn {
+  color: var(--run-1);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* ---------- Floating add button ---------- */
+
+.fab {
+  position: fixed;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.fab button {
+  pointer-events: auto;
+  background: var(--run-gradient);
+  color: white;
+  font-weight: 700;
+  font-size: 15px;
+  padding: 15px 26px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4);
+  min-height: 48px;
+}
+
+.fab button:active {
+  transform: scale(0.96);
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 20, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg);
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 16px;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.field-optional {
+  font-weight: 400;
+  text-transform: none;
+}
+
+.name-input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  margin-bottom: 18px;
+}
+
+.name-input:focus {
+  outline: none;
+  border-color: var(--run-1);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.emoji-option {
+  aspect-ratio: 1;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emoji-option.selected {
+  background: var(--run-gradient);
+  border-color: transparent;
+  transform: scale(1.05);
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-buttons-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-buttons-column .btn {
+  line-height: 1.3;
+  padding: 12px 16px;
+}
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--run-gradient);
+  color: white;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn-danger {
+  background: none;
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 14px;
+  min-height: 44px;
+}
+
+.btn-danger-solid {
+  background: var(--danger);
+  color: white;
+}
+
+/* ---------- Step builder ---------- */
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 10px 10px 8px;
+}
+
+.step-index {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 3px;
+}
+
+.step-row-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.step-name-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.step-name-input:focus {
+  outline: none;
+  border-color: var(--run-1);
+}
+
+.step-timer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-timer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.step-timer-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--run-1);
+}
+
+.step-seconds-input {
+  width: 60px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.step-seconds-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.step-preset-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.preset-chip.selected {
+  border-color: var(--run-1);
+  color: var(--run-1);
+  background: color-mix(in srgb, var(--run-1) 12%, transparent);
+}
+
+.step-row-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.step-move-btn {
+  width: 28px;
+  height: 24px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-radius: 6px;
+}
+
+.step-move-btn:disabled {
+  opacity: 0.25;
+}
+
+.step-move-btn:active:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.step-remove-btn {
+  width: 28px;
+  height: 24px;
+  font-size: 12px;
+  color: var(--danger);
+  border-radius: 6px;
+}
+
+.step-remove-btn:active {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.add-step-btn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  border: 1.5px dashed var(--border);
+  color: var(--run-1);
+  font-weight: 700;
+  font-size: 14px;
+  background: var(--surface);
+}
+
+/* ---------- Upgrade / Pro modal ---------- */
+
+.upgrade-copy {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+.upgrade-list {
+  margin: 0 0 20px;
+  padding-left: 20px;
+  font-size: 13.5px;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 16px 0 4px;
+}
+
+/* ---------- Backup & restore modal ---------- */
+
+.backup-file-input {
+  display: none;
+}
+
+.backup-status {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 0;
+  text-align: center;
+}
+
+.backup-status-success {
+  color: var(--run-2);
+}
+
+.backup-status-error {
+  color: var(--danger);
+}
+
+/* ---------- Guided run view (full screen) ---------- */
+
+.run-view {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  margin: 0 auto;
+  z-index: 10;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+
+.run-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: max(20px, env(safe-area-inset-top)) 20px 10px;
+}
+
+.run-cancel-btn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 16px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-progress-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-progress-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.run-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.run-progress-fill {
+  height: 100%;
+  background: var(--run-gradient);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.run-step-tap-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 20px;
+  padding: 20px 32px;
+  width: 100%;
+}
+
+.run-step-tap-area:active {
+  background: color-mix(in srgb, var(--run-1) 4%, transparent);
+}
+
+.run-step-emoji {
+  font-size: 64px;
+}
+
+.run-step-name {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 30px;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.run-manual-hint {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1.5px dashed var(--border);
+}
+
+.run-timer-ring {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: conic-gradient(var(--run-1) var(--pct), var(--surface-2) 0);
+  transition: background 1s linear;
+}
+
+.run-timer-ring::before {
+  content: "";
+  position: absolute;
+}
+
+.run-timer-num {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 36px;
+  color: var(--run-1);
+}
+
+.run-footer {
+  padding: 10px 20px 0;
+}
+
+.run-advance-btn {
+  width: 100%;
+}
+
+.run-complete {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  padding: 32px;
+  cursor: pointer;
+}
+
+.run-complete-emoji {
+  font-size: 64px;
+  margin-bottom: 6px;
+}
+
+.run-complete-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 28px;
+  margin: 0;
+  background: var(--run-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.run-complete-sub {
+  font-size: 15px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.run-complete-tap-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 24px;
+  opacity: 0.7;
+}
+
+/* ---------- Reminder banner + confetti ---------- */
+
+.milestone-banner {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--run-gradient);
+  color: white;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(79, 70, 229, 0.4);
+  z-index: 50;
+  animation: banner-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes banner-in {
+  from { transform: translate(-50%, -20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.reminder-banner {
+  background: var(--today-accent);
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.45);
+}
+
+.confetti-piece {
+  position: fixed;
+  top: -10px;
+  width: 8px;
+  height: 14px;
+  z-index: 49;
+  pointer-events: none;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  to {
+    transform: translateY(110vh) rotate(600deg);
+    opacity: 0.9;
+  }
+}

@@ -1,0 +1,51 @@
+name: iOS TestFlight (Daily Line)
+
+# Manual trigger only, same reasoning as the Hot Streak Habits workflow —
+# each run costs macOS CI minutes and a TestFlight upload isn't something
+# to fire off automatically.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/daily-line
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync Capacitor web assets into the native project
+        run: npm run sync
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/daily-line/ios/App
+
+      # Same cached-keychain trick as Hot Streak Habits, but keyed
+      # separately per app so a bad cert/profile in one app's keychain
+      # can't clobber another's.
+      - name: Cache CI keychain
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Keychains/ci_build-db
+          key: ios-ci-keychain-dailyline-v1
+
+      - name: Build and upload to TestFlight
+        working-directory: apps/daily-line/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CI_KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+        run: bundle exec fastlane beta

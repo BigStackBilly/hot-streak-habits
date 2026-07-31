@@ -1,0 +1,739 @@
+/* ===================================================================
+   MOOD SKY — visual identity
+   A dark "night sky" base (glowing stars on deep indigo/navy) is the
+   natural default — distinct on purpose from the sibling app's warm
+   cream/ember look. Light mode swaps in a soft "dawn" palette instead
+   of a flat white, so the sky metaphor holds in both themes.
+   =================================================================== */
+
+:root {
+  --bg-top: #0b0a1f;
+  --bg-bottom: #05060f;
+  --surface: rgba(255, 255, 255, 0.07);
+  --surface-2: rgba(255, 255, 255, 0.12);
+  --text: #f4f2ff;
+  --text-dim: #a9a4c9;
+  --border: rgba(255, 255, 255, 0.14);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+
+  --accent-1: #6ea8ff;
+  --accent-2: #b48cff;
+  --accent-gradient: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  --mint: #4fe3c1;
+  --danger: #ff6b81;
+
+  --star-dot-color: rgba(255, 255, 255, 0.85);
+  --star-dot-opacity: 1;
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+}
+
+[data-theme="light"] {
+  --bg-top: #ffd9c2;
+  --bg-bottom: #eef3ff;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-2: rgba(255, 255, 255, 0.92);
+  --text: #3a2b3d;
+  --text-dim: #8a7690;
+  --border: rgba(80, 50, 70, 0.14);
+  --shadow: 0 2px 16px rgba(120, 72, 90, 0.14);
+
+  --star-dot-color: rgba(255, 255, 255, 0.9);
+  --star-dot-opacity: 0.35;
+}
+
+/* Cosmetic sky packs (see SKY_PACKS in index.html) — each just swaps the
+   accent gradient stops, so the streak number, mood-bar save state, FAB
+   equivalents, and milestone banner all re-color for free. Star colors
+   themselves stay mood-driven regardless of pack, on purpose. */
+[data-pack="aurora"] { --accent-1: #34e0a1; --accent-2: #7b5cff; }
+[data-pack="sunset"] { --accent-1: #ff9a56; --accent-2: #ff5f96; }
+[data-pack="deepspace"] { --accent-1: #a768ff; --accent-2: #ff5fd1; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ambient starfield: a handful of small repeating radial-gradient dots
+   layered over the sky gradient, entirely CSS — no images, no canvas.
+   `--star-dot-opacity` (set per theme above) fades these down to a faint
+   scatter for the dawn palette instead of hiding them outright, since a
+   dawn sky can still show a few late stars. */
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 22%, var(--star-dot-color), transparent),
+    radial-gradient(1.2px 1.2px at 34% 68%, var(--star-dot-color), transparent),
+    radial-gradient(1.6px 1.6px at 58% 14%, var(--star-dot-color), transparent),
+    radial-gradient(1.2px 1.2px at 76% 48%, var(--star-dot-color), transparent),
+    radial-gradient(1.6px 1.6px at 89% 82%, var(--star-dot-color), transparent),
+    radial-gradient(1.2px 1.2px at 22% 88%, var(--star-dot-color), transparent),
+    radial-gradient(1.6px 1.6px at 47% 40%, var(--star-dot-color), transparent),
+    radial-gradient(1.2px 1.2px at 6% 55%, var(--star-dot-color), transparent),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  background-repeat: repeat, repeat, repeat, repeat, repeat, repeat, repeat, repeat, no-repeat;
+  background-size: 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 100% 100%;
+  background-attachment: fixed;
+  opacity: 1;
+  transition: background 0.3s ease;
+}
+
+body::before {
+  content: "";
+}
+
+/* Apply the fade to just the dot layers via a wrapping filter isn't
+   possible on background-image alone, so the per-theme opacity instead
+   comes from --star-dot-color's own alpha at the :root/[data-theme]
+   level combined with this overall dimming for the dawn palette. */
+[data-theme="light"] body {
+  background-blend-mode: normal;
+}
+
+body {
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+  gap: 8px;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.app-title .sparkle {
+  filter: drop-shadow(0 2px 4px rgba(110, 168, 255, 0.5));
+  display: inline-flex;
+}
+
+/* Owned/active PAID sky packs recolor the actual ✨ emoji via hue-rotate
+   instead of custom artwork — same technique as the sibling app's flame:
+   emoji glyphs are fixed-color bitmaps `color` can't touch, but `filter`
+   operates on the rendered pixels regardless of source, so the shape
+   stays legible with a shifted tint. The free Midnight pack is untouched.
+   Applies to both the header logo and the empty-state sparkle. */
+.app-title .sparkle.pack-aurora, .empty-state .emoji.pack-aurora { filter: hue-rotate(100deg) saturate(1.4) drop-shadow(0 2px 4px rgba(52, 224, 161, 0.45)); }
+.app-title .sparkle.pack-sunset, .empty-state .emoji.pack-sunset { filter: hue-rotate(300deg) saturate(1.5) drop-shadow(0 2px 4px rgba(255, 154, 86, 0.45)); }
+.app-title .sparkle.pack-deepspace, .empty-state .emoji.pack-deepspace { filter: hue-rotate(250deg) saturate(1.5) drop-shadow(0 2px 4px rgba(167, 104, 255, 0.45)); }
+
+.sparkle-emoji-animated {
+  display: inline-block;
+  animation: sparkle-twinkle 2.4s ease-in-out infinite;
+}
+
+@keyframes sparkle-twinkle {
+  0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  50% { transform: scale(1.15) rotate(8deg); opacity: 0.8; }
+}
+
+.header-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+
+/* Unread-style badge on the sky-shop icon — clears permanently the first
+   time the shop is opened (cosmetics.shopViewed), regardless of purchase. */
+.unread-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--bg-bottom);
+}
+
+/* ---------- Streak strip ---------- */
+
+.streak-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 20px 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.streak-num {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 20px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.streak-label {
+  font-weight: 600;
+}
+
+.streak-sep {
+  opacity: 0.5;
+  margin: 0 2px;
+}
+
+.streak-best {
+  font-weight: 600;
+}
+
+/* ---------- Empty state ---------- */
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 32px 20px;
+  gap: 10px;
+}
+
+.empty-state .emoji {
+  font-size: 52px;
+  margin-bottom: 6px;
+}
+
+.empty-state h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 21px;
+  margin: 0;
+}
+
+.empty-state p {
+  color: var(--text-dim);
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* ---------- The sky (scrollable, month-grouped starfield) ---------- */
+
+.sky-scroll {
+  flex: 1;
+  padding: 4px 16px 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+.month-sky {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.month-label {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-dim);
+  padding-left: 4px;
+}
+
+.month-canvas {
+  position: relative;
+  height: 172px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.constellation-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.constellation-lines polyline {
+  fill: none;
+  stroke: var(--accent-1);
+  stroke-width: 1;
+  opacity: 0.28;
+}
+
+.star {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: star-twinkle 3.2s ease-in-out infinite;
+}
+
+.star-core {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--star-color);
+  box-shadow: 0 0 8px 2px var(--star-color), 0 0 16px 4px color-mix(in srgb, var(--star-color) 60%, transparent);
+}
+
+@keyframes star-twinkle {
+  0%, 100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.85); }
+}
+
+/* ---------- Mood bar (always-docked one-tap picker) ---------- */
+
+.mood-bar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: var(--surface-2);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border);
+  border-radius: 24px 24px 0 0;
+  padding: 14px 18px max(16px, env(safe-area-inset-bottom));
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mood-bar-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.mood-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mood-option {
+  flex: 1;
+  min-height: 52px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease, border-color 0.2s ease;
+}
+
+.mood-option.selected {
+  background: color-mix(in srgb, var(--mood-color) 25%, transparent);
+  border-color: var(--mood-color);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--mood-color) 55%, transparent);
+  transform: scale(1.08);
+}
+
+.mood-option:active {
+  transform: scale(0.94);
+}
+
+.tag-input {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.tag-input:focus {
+  outline: none;
+  border-color: var(--accent-1);
+}
+
+.tag-input::placeholder {
+  color: var(--text-dim);
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 2, 10, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg-bottom);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--bg-top) 55%, var(--bg-bottom)), var(--bg-bottom));
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 16px;
+}
+
+.modal-sheet h3.stats-subheading {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 15px;
+  margin: 6px 0 10px;
+  color: var(--text-dim);
+}
+
+.reflection-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 4px 0 20px;
+}
+
+.day-detail-emoji {
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--surface-2);
+  border: 2px solid var(--star-color, var(--accent-1));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--star-color, var(--accent-1)) 45%, transparent);
+}
+
+.reflection-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 19px;
+  margin: 0 0 4px;
+}
+
+.reflection-subtitle {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.reason-quote {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--text);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+/* ---------- Stats ---------- */
+
+.stats-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.stat-tile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.stat-num {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.mood-dist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.dist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dist-emoji {
+  font-size: 16px;
+  width: 22px;
+  text-align: center;
+}
+
+.dist-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  width: 42px;
+  flex-shrink: 0;
+}
+
+.dist-bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.dist-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.dist-count {
+  font-size: 12px;
+  font-weight: 700;
+  width: 20px;
+  text-align: right;
+}
+
+/* ---------- Sky shop (theme packs) ---------- */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+}
+
+.theme-option.selected {
+  border-color: var(--accent-1);
+}
+
+.theme-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.theme-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.theme-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 4px 0 18px;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: #0b0a1f;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-danger {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+/* ---------- Milestone celebration ---------- */
+
+.milestone-banner {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent-gradient);
+  color: #0b0a1f;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(110, 168, 255, 0.45);
+  z-index: 50;
+  animation: banner-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+
+@keyframes banner-in {
+  from { transform: translate(-50%, -20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.reminder-banner {
+  background: var(--mint);
+  box-shadow: 0 8px 24px rgba(79, 227, 193, 0.45);
+}
+
+.star-piece {
+  position: fixed;
+  top: -20px;
+  z-index: 49;
+  pointer-events: none;
+  animation-name: star-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+}
+
+@keyframes star-fall {
+  to {
+    transform: translateY(110vh) rotate(360deg);
+    opacity: 0.9;
+  }
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 360px) {
+  .app-title { font-size: 20px; }
+  .theme-toggle { width: 36px; height: 36px; font-size: 16px; }
+}
