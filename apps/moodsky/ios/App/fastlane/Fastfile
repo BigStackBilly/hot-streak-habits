@@ -137,11 +137,13 @@ platform :ios do
       version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
 
       version.create_app_store_review_detail(
-        contact_first_name: "Niloc",
-        contact_last_name: "Dekkers",
-        contact_phone: "+31627240888",
-        contact_email: "hotstreakhabits@gmail.com",
-        demo_account_required: false,
+        attributes: {
+          contactFirstName: "Niloc",
+          contactLastName: "Dekkers",
+          contactPhone: "+31627240888",
+          contactEmail: "hotstreakhabits@gmail.com",
+          demoAccountRequired: false,
+        },
       )
       UI.message("Created App Store review detail contact info")
     rescue => e

@@ -136,7 +136,16 @@ platform :ios do
       version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
       version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
 
-      UI.message("DIAG params: #{version.method(:create_app_store_review_detail).parameters}")
+      version.create_app_store_review_detail(
+        attributes: {
+          contactFirstName: "Niloc",
+          contactLastName: "Dekkers",
+          contactPhone: "+31627240888",
+          contactEmail: "hotstreakhabits@gmail.com",
+          demoAccountRequired: false,
+        },
+      )
+      UI.message("Created App Store review detail contact info")
     rescue => e
       UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
     end
