@@ -154,20 +154,16 @@ platform :ios do
     version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
 
     begin
-      app_info = app.get_app_infos.first
-      UI.message("DIAG app_info class: #{app_info.class}")
-      UI.message("DIAG app_info methods (age): #{app_info.methods.grep(/age/i).sort}")
-      age_rating = app_info.fetch_age_rating_declaration
-      UI.message("DIAG age_rating class: #{age_rating.class}")
-      UI.message("DIAG age_rating update params: #{age_rating.method(:update).parameters}")
+      UI.message("DIAG app methods (info): #{app.methods.grep(/info/i).sort}")
     rescue => e
-      UI.message("DIAG age_rating probe failed: #{e.message}")
+      UI.message("DIAG app info method probe failed: #{e.message}")
     end
 
     begin
-      UI.message("DIAG AppPriceSchedule defined?: #{Spaceship::ConnectAPI.const_defined?(:AppPriceSchedule)}")
-      UI.message("DIAG app.prices= params: #{app.method(:prices=).parameters}")
-      UI.message("DIAG app fetch_app_prices params: #{app.method(:fetch_app_prices).parameters}")
+      prices = app.fetch_app_prices
+      UI.message("DIAG current prices: #{prices.inspect}")
+      UI.message("DIAG AppPricePoint defined?: #{Spaceship::ConnectAPI.const_defined?(:AppPricePoint)}")
+      UI.message("DIAG app methods (price_point): #{app.methods.grep(/price_point/i).sort}")
     rescue => e
       UI.message("DIAG pricing probe failed: #{e.message}")
     end
