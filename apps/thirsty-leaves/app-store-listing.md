@@ -62,9 +62,21 @@ No objectionable content, no ads, no user-generated content, no gambling — sho
 ## Support URL
 
 ```
-TODO: this app is not deployed anywhere yet — replace with a real hosted
-URL (e.g. Netlify/GitHub Pages) for support.html before submitting.
+https://bigstackbilly.github.io/thirsty-leaves-pages/support.html
 ```
+
+Privacy Policy URL (App Store Connect asks for this separately):
+
+```
+https://bigstackbilly.github.io/thirsty-leaves-pages/privacy.html
+```
+
+Note: these two pages are hosted in a small dedicated repo
+(`BigStackBilly/thirsty-leaves-pages`), not the main app repo — deliberately
+kept separate so the app's real source stays private pre-launch. The pages
+are `noindex` + blocked via `robots.txt`, so they're reachable but not
+crawled/discoverable. Swap this for the main Netlify-hosted URL once the
+app itself is publicly announced.
 
 ## Marketing URL (optional — leave blank if you don't have one)
 
