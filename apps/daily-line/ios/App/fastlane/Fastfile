@@ -153,13 +153,20 @@ platform :ios do
     begin
       app = Spaceship::ConnectAPI::App.find(app_identifier)
       version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
-      UI.message("DIAG version age methods: #{version.methods.grep(/age/i).sort}")
-      UI.message("DIAG version pricing methods: #{version.methods.grep(/pric/i).sort}")
-      UI.message("DIAG app pricing methods: #{app.methods.grep(/pric/i).sort}")
-      UI.message("DIAG version privacy/data methods: #{version.methods.grep(/privacy|data_usage|dataUsage/i).sort}")
-      UI.message("DIAG app privacy/data methods: #{app.methods.grep(/privacy|data_usage|dataUsage/i).sort}")
+
+      age_rating = version.fetch_age_rating_declaration
+      UI.message("DIAG age_rating class: #{age_rating.class}")
+      UI.message("DIAG age_rating methods: #{age_rating.methods.grep(/update|attribute/i).sort}")
+      UI.message("DIAG age_rating params: #{age_rating.method(:update).parameters}") rescue UI.message("DIAG age_rating has no update method")
+
+      UI.message("DIAG AppPriceSchedule defined?: #{Spaceship::ConnectAPI.const_defined?(:AppPriceSchedule)}")
+      UI.message("DIAG app.prices= params: #{app.method(:prices=).parameters}")
+      UI.message("DIAG app fetch_app_prices params: #{app.method(:fetch_app_prices).parameters}")
+
+      UI.message("DIAG ConnectAPI module methods (privacy): #{Spaceship::ConnectAPI.methods.grep(/privacy|data_usage/i).sort}")
+      UI.message("DIAG ConnectAPI constants (privacy): #{Spaceship::ConnectAPI.constants.grep(/Privacy|DataUsage/i).sort}")
     rescue => e
-      UI.message("DIAG probe failed: #{e.message}")
+      UI.message("DIAG probe failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
     end
 
     # Manual release on purpose — even once Apple approves this, it should
