@@ -150,44 +150,31 @@ platform :ios do
       UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
     end
 
-    app = Spaceship::ConnectAPI::App.find(app_identifier)
-    version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
-
-    begin
-      UI.message("DIAG app methods (info): #{app.methods.grep(/info/i).sort}")
-    rescue => e
-      UI.message("DIAG app info method probe failed: #{e.message}")
-    end
-
-    begin
-      prices = app.fetch_app_prices
-      UI.message("DIAG current prices: #{prices.inspect}")
-      UI.message("DIAG AppPricePoint defined?: #{Spaceship::ConnectAPI.const_defined?(:AppPricePoint)}")
-      UI.message("DIAG app methods (price_point): #{app.methods.grep(/price_point/i).sort}")
-    rescue => e
-      UI.message("DIAG pricing probe failed: #{e.message}")
-    end
-
-    begin
-      UI.message("DIAG ConnectAPI module methods (privacy): #{Spaceship::ConnectAPI.methods.grep(/privacy|data_usage/i).sort}")
-      UI.message("DIAG ConnectAPI constants (privacy): #{Spaceship::ConnectAPI.constants.grep(/Privacy|DataUsage/i).sort}")
-      UI.message("DIAG app methods (privacy): #{app.methods.grep(/privacy|data_usage/i).sort}")
-    rescue => e
-      UI.message("DIAG privacy probe failed: #{e.message}")
-    end
-
     # Manual release on purpose — even once Apple approves this, it should
     # stay dark until a human explicitly flips it live, not go public the
     # moment review clears.
+    #
+    # Apple requires age rating, App Privacy data-usage declaration, and
+    # pricing to be set before a first submission will be accepted - none
+    # of these are automatable here (pricing hits a hard API-version
+    # mismatch in this fastlane release, and age rating has 20+ fields in
+    # Apple's current questionnaire, too many to safely guess at). These
+    # three need a ~2min manual pass per app in App Store Connect before
+    # this lane's submit_for_review will actually succeed.
     deliver(
       api_key: api_key,
       app_identifier: app_identifier,
       app_version: "1.0",
-      submit_for_review: false,
+      submit_for_review: true,
+      automatic_release: false,
+      run_precheck_before_submit: false,
       force: true,
       skip_binary_upload: true,
-      skip_screenshots: true,
-      skip_metadata: true,
+      overwrite_screenshots: true,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+      },
     )
   end
 end
