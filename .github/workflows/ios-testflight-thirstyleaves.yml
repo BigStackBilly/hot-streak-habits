@@ -1,0 +1,62 @@
+name: iOS TestFlight (Thirsty Leaves)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/thirsty-leaves
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync Capacitor web assets into the native project
+        run: npm run sync
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/thirsty-leaves/ios/App
+
+      # Same shared cache key as every other app in this repo
+      # (ios-ci-keychain-v1), not a per-app one: a Distribution certificate
+      # is team-wide, and Apple's account-wide quota (2 max) is already
+      # partly used by other apps, so reusing the same cached keychain
+      # avoids minting (and burning a slot on) a redundant certificate.
+      - name: Cache CI keychain
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Keychains/ci_build-db
+          key: ios-ci-keychain-v1
+
+      - name: Build and upload to TestFlight
+        working-directory: apps/thirsty-leaves/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CI_KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+        run: bundle exec fastlane beta
+
+      # Explicit restore/save split (not the combined actions/cache@v4
+      # step) -- confirmed via Cold Turkey Tracker that the combined
+      # step's automatic save-on-post does not reliably fire when a later
+      # step in the job fails, which can silently burn a certificate-quota
+      # slot with nothing persisted to reuse next time.
+      - name: Save CI keychain cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Keychains/ci_build-db
+          key: ios-ci-keychain-v1

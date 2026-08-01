@@ -1,0 +1,1 @@
+A plant watering tracker that shows real health, not just a checklist — and gently stops you before you overwater. No login, no ads, no tracking.
