@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Thirsty Leaves</title>
+<meta name="theme-color" content="#22A559" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this family uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Thirsty Leaves" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// THIRSTY LEAVES — a small local-first plant watering tracker
+//
+// Sibling app to Hot Streak Habits / Routine Runner / etc, same house
+// style: this lives inline in index.html (rather than a separate app.js)
+// so the app can be opened directly as a file:// URL with zero
+// server/build step — the in-browser Babel transformer can't fetch a
+// separate local script file over file://, but it can transform a
+// script that's already inline.
+//
+// The core mechanic borrows Hot Streak Habits' "intervalDays" plan math
+// (a plant's watering plan is just "check in at least every N days"),
+// but reframes the emotional hook: instead of a streak that breaks,
+// each plant has a HEALTH STATE (thriving -> wilting -> critical) that
+// visibly droops the longer it goes unwatered, and recovers the moment
+// you water it. The other genuinely new mechanic here is the
+// "overwatering guard" — tapping to water a plant that isn't due yet
+// asks you to confirm, because overwatering (not underwatering) is the
+// most common real way houseplants actually die.
+//
+// Organized top to bottom as:
+//   1. Date helpers        - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Care math            - pure functions, no React, easy to test by hand
+//   3. localStorage helpers - load/save plants, theme, pro, reminders
+//   4. Small presentational components (EmptyState, MoistureBar, Confetti)
+//   5. PlantCard             - one plant's row in the list
+//   6. PlantModal            - the bottom-sheet form for creating/editing
+//   6b. UpgradeModal         - the "Pro" paywall
+//   6c. BackupModal          - export/import everything to a local JSON file
+//   6d. RecommitModal        - shown once when a plant's care streak just broke
+//   7. App                   - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const STORAGE_KEY = "thirstyleaves.plants.v1";
+const THEME_KEY = "thirstyleaves.theme.v1";
+const PRO_KEY = "thirstyleaves.pro.v1";
+const NOTIF_KEY = "thirstyleaves.notifsEnabled.v1";
+const NOTIFIED_TODAY_KEY = "thirstyleaves.notifiedToday.v1";
+const MILESTONES = [7, 30, 100];
+const MAX_FREE_PLANTS = 3;
+const PRO_PRICE = "$3.99";
+
+const EMOJI_CHOICES = [
+  "🪴", "🌵", "🌿", "🌱", "🍀", "🌸",
+  "🌻", "🌷", "🌹", "🌴", "🌲", "🌳",
+  "🍃", "🌼", "🎋", "🪷", "🌾", "🍁",
+  "🌺", "🥑", "🍅", "🎍", "💐", "🌰",
+];
+
+const LIGHT_CHOICES = [
+  { id: "low", label: "Low light", icon: "🌑" },
+  { id: "medium", label: "Medium light", icon: "🌤️" },
+  { id: "bright", label: "Bright light", icon: "☀️" },
+];
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// We store each watering as a "YYYY-MM-DD" string in the user's LOCAL
+// timezone. We deliberately do NOT use `date.toISOString()` anywhere
+// here, because toISOString() converts to UTC first — for anyone west
+// of Greenwich, watering a plant at 9pm could silently get recorded as
+// "tomorrow". Building the string manually from getFullYear/getMonth/
+// getDate keeps it anchored to the user's actual calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Add `delta` days to a "YYYY-MM-DD" key and return a new key. Goes via a
+// local Date built from the individual Y/M/D numbers (not `new Date(key)`,
+// which parses as UTC midnight and can land on the wrong local day) so this
+// stays consistent with toDateKey().
+function keyPlusDays(key, delta) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + delta);
+  return toDateKey(date);
+}
+
+// Number of days from keyA to keyB (positive if keyB is later).
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+function intervalLabel(days) {
+  if (days === 1) return "Daily";
+  if (days === 7) return "Weekly";
+  if (days === 14) return "Every 2 weeks";
+  if (days === 30) return "Monthly";
+  return `Every ${days} days`;
+}
+
+// ---------------------------------------------------------------------
+// 2. CARE MATH
+//
+// A plant's "wateredDates" is just an array of date-key strings — the
+// days it was actually watered. Everything else (current care streak,
+// longest streak, due date, health state) is *derived* from that array
+// plus intervalDays every render instead of being stored, same
+// philosophy as every sibling app: one source of truth, so nothing can
+// drift out of sync.
+// ---------------------------------------------------------------------
+
+function getCurrentCareStreak(wateredDates, intervalDays) {
+  if (wateredDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(wateredDates)].sort();
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const daysSinceLast = daysBetween(lastKey, todayKey());
+
+  if (daysSinceLast > intervalDays) return 0;
+
+  let streak = 1;
+  for (let i = sortedKeys.length - 1; i > 0; i--) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    if (gap > intervalDays) break;
+    streak++;
+  }
+  return streak;
+}
+
+function getLongestCareStreak(wateredDates, intervalDays) {
+  if (wateredDates.length === 0) return 0;
+
+  const sortedKeys = [...new Set(wateredDates)].sort();
+  let longest = 1;
+  let run = 1;
+
+  for (let i = 1; i < sortedKeys.length; i++) {
+    const gap = daysBetween(sortedKeys[i - 1], sortedKeys[i]);
+    run = gap <= intervalDays ? run + 1 : 1;
+    longest = Math.max(longest, run);
+  }
+
+  return longest;
+}
+
+// Everything the UI needs about where a plant stands today: when it's
+// next due, how overdue (if at all), and which of four health states it's
+// in. "wilting" covers the first full interval past due; "critical" is
+// anything beyond that — the plant has now gone more than two full
+// watering cycles without water.
+function getCareInfo(plant) {
+  const intervalDays = plant.intervalDays || 7;
+  const todayK = todayKey();
+  const sortedKeys = [...new Set(plant.wateredDates)].sort();
+
+  if (sortedKeys.length === 0) {
+    return {
+      dueKey: todayK,
+      lastWateredKey: null,
+      isDoneToday: false,
+      isDueToday: true,
+      isOverdue: false,
+      daysOverdue: 0,
+      daysUntilDue: 0,
+      health: "new",
+    };
+  }
+
+  const lastKey = sortedKeys[sortedKeys.length - 1];
+  const dueKey = keyPlusDays(lastKey, intervalDays);
+  const isDoneToday = sortedKeys.includes(todayK);
+  const gap = daysBetween(dueKey, todayK); // today - due, in days
+
+  const isDueToday = !isDoneToday && gap === 0;
+  const isOverdue = !isDoneToday && gap > 0;
+  const daysOverdue = isOverdue ? gap : 0;
+  const daysUntilDue = gap < 0 ? -gap : 0;
+
+  let health = "thriving";
+  if (isOverdue) {
+    health = daysOverdue > intervalDays ? "critical" : "wilting";
+  } else if (isDoneToday) {
+    health = "justWatered";
+  } else if (isDueToday) {
+    health = "due";
+  }
+
+  return { dueKey, lastWateredKey: lastKey, isDoneToday, isDueToday, isOverdue, daysOverdue, daysUntilDue, health };
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadPlants() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePlants(plants) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(plants));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function savePro(pro) {
+  localStorage.setItem(PRO_KEY, JSON.stringify(pro));
+}
+
+function loadNotifsEnabled() {
+  return localStorage.getItem(NOTIF_KEY) === "1";
+}
+
+function loadNotifiedMap() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTIFIED_TODAY_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNotifiedMap(map) {
+  localStorage.setItem(NOTIFIED_TODAY_KEY, JSON.stringify(map));
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A short two-beep buzzer using the Web Audio API directly — no audio file
+// to ship, works offline, and is enough to notice without being jarring.
+function playBuzzer() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.18].forEach((startAt) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 587;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.16);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.18);
+    });
+  } catch {
+    // Web Audio isn't available (or blocked until a user gesture) — the
+    // in-app banner and OS notification still get the point across.
+  }
+}
+
+// A quiet little "splash" chime played right when a plant gets watered.
+function playSplash() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.09, 0.18].forEach((startAt, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 520 + i * 140;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.22);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.22);
+    });
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ onAdd }) {
+  return (
+    <div className="empty-state">
+      <div className="emoji">🪴</div>
+      <h2>No plants yet</h2>
+      <p>Add a plant, set how often it likes water, and never forget (or overdo) it again.</p>
+      <button className="btn btn-primary" style={{ padding: "14px 28px" }} onClick={onAdd}>
+        + Add your first plant
+      </button>
+    </div>
+  );
+}
+
+// A horizontal bar showing how "full" a plant's water reserve is, from a
+// full green bar right after watering, draining down to empty exactly on
+// the due date, then a pulsing red overflow past that. This replaces the
+// week-dots grid every sibling app uses, because watering intervals here
+// range from 1 to 30 days — a fixed 7-day window doesn't mean much for a
+// once-a-month cactus.
+function MoistureBar({ plant, care }) {
+  const intervalDays = plant.intervalDays || 7;
+  let pct;
+  if (care.health === "new") {
+    pct = 0;
+  } else if (care.isOverdue) {
+    pct = 0;
+  } else {
+    const sortedKeys = [...new Set(plant.wateredDates)].sort();
+    const lastKey = sortedKeys[sortedKeys.length - 1];
+    const sinceLast = daysBetween(lastKey, todayKey());
+    pct = Math.max(0, Math.round(100 - (sinceLast / intervalDays) * 100));
+  }
+
+  return (
+    <div className="moisture-track">
+      <div className={`moisture-fill ${care.health}`} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+// A short burst of falling colored rectangles, purely CSS-driven. Not a
+// real physics sim — just enough motion to feel celebratory without
+// pulling in a confetti library for one animation.
+function Confetti() {
+  const colors = ["#22A559", "#0EA5E9", "#86E88F", "#F2C9A0", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+const HEALTH_LABEL = {
+  new: "Not watered yet",
+  justWatered: "Just watered",
+  thriving: "Thriving",
+  due: "Due today",
+  wilting: "Wilting",
+  critical: "Needs help",
+};
+
+// ---------------------------------------------------------------------
+// 5. PLANT CARD
+// ---------------------------------------------------------------------
+
+function PlantCard({ plant, onWater, onEdit, onDelete, onToggleReminders }) {
+  const care = getCareInfo(plant);
+  const currentStreak = getCurrentCareStreak(plant.wateredDates, plant.intervalDays || 7);
+  const longestStreak = getLongestCareStreak(plant.wateredDates, plant.intervalDays || 7);
+  const light = LIGHT_CHOICES.find((l) => l.id === plant.light);
+
+  let statusText;
+  if (care.health === "new") {
+    statusText = "Tap water to log the first watering";
+  } else if (care.isDoneToday) {
+    statusText = "Watered today";
+  } else if (care.isDueToday) {
+    statusText = "Due today";
+  } else if (care.isOverdue) {
+    statusText = `Overdue by ${care.daysOverdue} day${care.daysOverdue === 1 ? "" : "s"}`;
+  } else {
+    statusText = `Due in ${care.daysUntilDue} day${care.daysUntilDue === 1 ? "" : "s"}`;
+  }
+
+  return (
+    <div className={`plant-card health-${care.health}`}>
+      <div className="plant-top-row">
+        <button className="plant-tap-area" onClick={() => onEdit(plant)}>
+          <div className={`plant-emoji-ring ${care.health}`}>
+            <span className="plant-emoji">{plant.emoji}</span>
+          </div>
+          <div className="plant-info">
+            <div className="plant-name-row">
+              <span className="plant-name">{plant.name}</span>
+              {light && <span className="light-chip">{light.icon}</span>}
+            </div>
+            <div className="plant-status-row">
+              <span className={`health-badge ${care.health}`}>{HEALTH_LABEL[care.health]}</span>
+              <span className="status-text">{statusText}</span>
+            </div>
+            {currentStreak > 0 && (
+              <span className="plant-streak">🌱 {currentStreak} on-time watering{currentStreak === 1 ? "" : "s"} in a row · best {longestStreak}</span>
+            )}
+          </div>
+        </button>
+
+        <div className="plant-actions">
+          <button
+            className="icon-btn"
+            onClick={() => onToggleReminders(plant.id)}
+            aria-label={plant.remindersEnabled === false ? "Turn reminders on" : "Mute reminders"}
+          >
+            {plant.remindersEnabled === false ? "🔕" : "🔔"}
+          </button>
+          <button className="icon-btn" onClick={() => onDelete(plant.id)} aria-label="Delete plant">🗑️</button>
+        </div>
+      </div>
+
+      <MoistureBar plant={plant} care={care} />
+
+      <button className="btn btn-primary water-btn" onClick={() => onWater(plant, care)}>
+        {care.isDoneToday ? "💧 Water again" : "💧 Water now"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. PLANT MODAL — create/edit a plant
+// ---------------------------------------------------------------------
+
+const INTERVAL_PRESETS = [1, 3, 7, 14, 21, 30];
+
+function PlantModal({ plant, onSave, onDelete, onClose }) {
+  const isEditing = Boolean(plant);
+  const [name, setName] = useState(plant ? plant.name : "");
+  const [emoji, setEmoji] = useState(plant ? plant.emoji : EMOJI_CHOICES[0]);
+  const [intervalDays, setIntervalDays] = useState(plant ? plant.intervalDays : 7);
+  const [light, setLight] = useState(plant ? plant.light || "medium" : "medium");
+  const [reason, setReason] = useState(plant ? plant.reason || "" : "");
+
+  const canSave = name.trim().length > 0;
+
+  function handleSave() {
+    if (!canSave) return;
+    if (isEditing) {
+      onSave({ ...plant, name: name.trim(), emoji, intervalDays, light, reason: reason.trim() });
+    } else {
+      onSave({
+        id: makeId(),
+        name: name.trim(),
+        emoji,
+        intervalDays,
+        light,
+        reason: reason.trim(),
+        wateredDates: [],
+        createdAt: todayKey(),
+        lastAcknowledgedMiss: null,
+      });
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{isEditing ? "Edit plant" : "New plant"}</h2>
+
+        <label className="field-label" htmlFor="plant-name">Name</label>
+        <input
+          id="plant-name"
+          className="name-input"
+          placeholder="e.g. Living room fern"
+          value={name}
+          maxLength={40}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <label className="field-label">Icon</label>
+        <div className="emoji-grid">
+          {EMOJI_CHOICES.map((e) => (
+            <button
+              key={e}
+              type="button"
+              className={`emoji-option ${emoji === e ? "selected" : ""}`}
+              onClick={() => setEmoji(e)}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label">
+          Watering plan <span className="field-value">{intervalLabel(intervalDays)}</span>
+        </label>
+        <input
+          type="range"
+          min="1"
+          max="30"
+          value={intervalDays}
+          className="interval-slider"
+          onChange={(e) => setIntervalDays(Number(e.target.value))}
+        />
+        <div className="preset-row">
+          {INTERVAL_PRESETS.map((d) => (
+            <button
+              key={d}
+              type="button"
+              className={`preset-chip ${intervalDays === d ? "selected" : ""}`}
+              onClick={() => setIntervalDays(d)}
+            >
+              {intervalLabel(d)}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label" style={{ marginTop: 18 }}>Light</label>
+        <div className="light-row">
+          {LIGHT_CHOICES.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              className={`light-option ${light === l.id ? "selected" : ""}`}
+              onClick={() => setLight(l.id)}
+            >
+              <span>{l.icon}</span> {l.label}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label" htmlFor="plant-reason" style={{ marginTop: 18 }}>
+          Note <span className="field-optional">(optional — shown again if it's ever struggling)</span>
+        </label>
+        <input
+          id="plant-reason"
+          className="name-input"
+          placeholder="e.g. Gift from Mom"
+          value={reason}
+          maxLength={80}
+          onChange={(e) => setReason(e.target.value)}
+        />
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!canSave} onClick={handleSave}>
+            {isEditing ? "Save" : "Add plant"}
+          </button>
+        </div>
+
+        {isEditing && (
+          <button
+            className="btn-danger"
+            style={{ width: "100%", marginTop: 10 }}
+            onClick={() => onDelete(plant.id)}
+          >
+            Delete plant
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6b. UPGRADE MODAL — the "Pro" paywall
+//
+// Mirrors every sibling app's cosmetic/cap-lift paywall pattern:
+// "purchasing" here only flips a local flag and unlocks unlimited
+// plants, with the footer note upfront that real billing isn't wired up
+// yet.
+// ---------------------------------------------------------------------
+
+function UpgradeModal({ pro, onPurchase, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Thirsty Leaves Pro</h2>
+
+        {pro.owned ? (
+          <>
+            <p className="upgrade-copy">
+              ✓ Pro is unlocked on this device — thanks for supporting the app! Unlimited plants, no limits.
+            </p>
+            <div className="modal-buttons">
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">
+              The free plan is capped at {MAX_FREE_PLANTS} plants. Unlock Pro for unlimited plants —
+              your whole windowsill, not just the favorites.
+            </p>
+            <ul className="upgrade-list">
+              <li>Unlimited plants (free plan: {MAX_FREE_PLANTS})</li>
+              <li>Everything else — care streaks, reminders, backup — stays exactly the same</li>
+              <li>One-time unlock, no subscription</li>
+            </ul>
+            <div className="modal-buttons-column">
+              <button className="btn btn-primary" onClick={() => onPurchase()}>
+                Unlock Pro — {PRO_PRICE}
+              </button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6c. BACKUP MODAL — export/import everything to a local JSON file
+//
+// Deliberately NOT gated behind Pro: losing every plant and its care
+// history because a phone was lost or reinstalled is a real trust
+// problem, and locking someone's own data recovery behind a paywall
+// would be predatory. Fully local — reads/writes localStorage directly
+// and triggers a normal browser file download/upload, no network calls.
+// ---------------------------------------------------------------------
+
+const BACKUP_KEYS = [STORAGE_KEY, THEME_KEY, PRO_KEY, NOTIF_KEY, NOTIFIED_TODAY_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+
+    const payload = { app: "thirstyleaves", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `thirsty-leaves-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+
+      if (!parsed || parsed.app !== "thirstyleaves" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Thirsty Leaves backup file." });
+        return;
+      }
+
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+
+      Object.keys(parsed.data).forEach((key) => {
+        localStorage.setItem(key, parsed.data[key]);
+      });
+      window.location.reload();
+    };
+    reader.onerror = () => {
+      setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+
+        <p className="upgrade-copy">
+          Save every plant, care streak, and setting to a file on your device — and bring it all back
+          later, even after reinstalling or switching phones.
+        </p>
+
+        <label className="field-label">Download</label>
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: "100%", marginBottom: 18 }}
+          onClick={handleDownload}
+        >
+          ⬇ Download backup
+        </button>
+
+        <label className="field-label">Restore</label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ width: "100%" }}
+          onClick={handleRestoreClick}
+        >
+          ⬆ Restore from backup
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="backup-file-input"
+          onChange={handleFileChange}
+        />
+
+        {status && (
+          <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>
+            {status.text}
+          </p>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">
+          Free, always — this is your data, not a premium feature. Nothing leaves your device.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6d. RECOMMIT MODAL — shown once when a plant's care streak just broke
+//
+// Same "no silent resets" philosophy as Hot Streak Habits: rather than
+// quietly zeroing the streak and moving on, the app asks you to sit
+// with it for a second — reframed here as a rescue, not a scolding,
+// since a struggling plant is a more sympathetic situation than a
+// broken habit. Only ever shown once per missed due date (tracked via
+// lastAcknowledgedMiss, same pattern as Hot Streak's
+// lastAcknowledgedFailure), and answering it is what actually lets the
+// watering go through.
+// ---------------------------------------------------------------------
+
+function RecommitModal({ plant, care, onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{plant.emoji} {plant.name} needs you</h2>
+        <p className="upgrade-copy">
+          It's been {care.daysOverdue} day{care.daysOverdue === 1 ? "" : "s"} past due for water.
+          {plant.reason ? ` You noted: "${plant.reason}"` : ""} Let's get it back on track.
+        </p>
+        <div className="modal-buttons-column">
+          <button className="btn btn-primary" onClick={onConfirm}>💧 Water it now</button>
+          <button className="btn btn-secondary" onClick={onCancel}>Not yet</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6e. OVERWATER GUARD — shown when watering more than a day before due
+//
+// The one mechanic no sibling app has: gently pushing back on checking
+// in too EARLY rather than too late. Real houseplants are killed by
+// overwatering far more often than underwatering, so this is genuine
+// care advice, not just a UI gate.
+// ---------------------------------------------------------------------
+
+function OverwaterGuardModal({ plant, care, onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Not due for {care.daysUntilDue} more day{care.daysUntilDue === 1 ? "" : "s"}</h2>
+        <p className="upgrade-copy">
+          {plant.emoji} {plant.name} is on a {intervalLabel(plant.intervalDays).toLowerCase()} plan. Most
+          plants do better with a proper dry-out between waterings than extra water early — overwatering
+          is the #1 real way houseplants die.
+        </p>
+        <div className="modal-buttons-column">
+          <button className="btn btn-secondary" onClick={onCancel}>Good call, I'll wait</button>
+          <button className="btn btn-primary" onClick={onConfirm}>Water anyway</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [plants, setPlants] = useState(loadPlants);
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [modalState, setModalState] = useState({ open: false, plant: null });
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [notifsEnabled, setNotifsEnabled] = useState(loadNotifsEnabled);
+  const [reminder, setReminder] = useState(null);
+  const [recommitTarget, setRecommitTarget] = useState(null); // { plant, care }
+  const [overwaterTarget, setOverwaterTarget] = useState(null); // { plant, care }
+  const [justWateredId, setJustWateredId] = useState(null);
+  const [milestoneBanner, setMilestoneBanner] = useState(null);
+
+  useEffect(() => {
+    savePlants(plants);
+  }, [plants]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    savePro(pro);
+  }, [pro]);
+
+  // The "buzzer": whenever a plant is due today, fire an in-app banner +
+  // beep + vibration, plus a real OS notification if permission's been
+  // granted. Runs on load, whenever the tab regains focus, and every few
+  // minutes while it stays open — there's no backend here to push a
+  // notification while the app is fully closed. Only ever buzzes ONCE per
+  // plant per day (tracked in notifiedMap).
+  useEffect(() => {
+    function checkDuePlants() {
+      const todayK = todayKey();
+      const notifiedMap = loadNotifiedMap();
+      let mapChanged = false;
+
+      plants.forEach((plant) => {
+        const care = getCareInfo(plant);
+        const muted = plant.remindersEnabled === false;
+        // Buzz for a plant that's due TODAY *or* already overdue — a missed
+        // due date shouldn't go silent just because the day rolled over.
+        // Still only once per plant per day (tracked via notifiedMap), so a
+        // week-overdue plant nags daily, not every 5-minute recheck.
+        if ((care.isDueToday || care.isOverdue) && !muted && notifiedMap[plant.id] !== todayK) {
+          buzz(plant, care);
+          notifiedMap[plant.id] = todayK;
+          mapChanged = true;
+        }
+      });
+
+      if (mapChanged) saveNotifiedMap(notifiedMap);
+    }
+
+    checkDuePlants();
+    const interval = setInterval(checkDuePlants, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", checkDuePlants);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkDuePlants);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plants, notifsEnabled]);
+
+  function buzz(plant, care) {
+    playBuzzer();
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+    const message = care && care.isOverdue
+      ? `${plant.emoji} ${plant.name} is overdue for water by ${care.daysOverdue} day${care.daysOverdue === 1 ? "" : "s"}!`
+      : `${plant.emoji} ${plant.name} is due for water today!`;
+
+    setReminder({ plant, message });
+    setTimeout(() => setReminder((cur) => (cur && cur.plant.id === plant.id ? null : cur)), 5000);
+
+    if (notifsEnabled && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification("🪴 Thirsty Leaves", {
+          body: message,
+          icon: "icon-192.png",
+          tag: plant.id,
+        });
+      } catch {
+        // Some browsers (mobile Chrome) require going through a Service
+        // Worker registration instead — the in-app banner still covers it.
+      }
+    }
+  }
+
+  function toggleNotifications() {
+    if (notifsEnabled) {
+      setNotifsEnabled(false);
+      localStorage.setItem(NOTIF_KEY, "0");
+      return;
+    }
+    if (!("Notification" in window)) {
+      setNotifsEnabled(true);
+      localStorage.setItem(NOTIF_KEY, "1");
+      return;
+    }
+    Notification.requestPermission().then((permission) => {
+      const enabled = permission === "granted";
+      setNotifsEnabled(enabled);
+      localStorage.setItem(NOTIF_KEY, enabled ? "1" : "0");
+    });
+  }
+
+  function openAddModal() {
+    if (!pro.owned && plants.length >= MAX_FREE_PLANTS) {
+      setUpgradeModalOpen(true);
+      return;
+    }
+    setModalState({ open: true, plant: null });
+  }
+
+  function openEditModal(plant) {
+    setModalState({ open: true, plant });
+  }
+
+  function closeModal() {
+    setModalState({ open: false, plant: null });
+  }
+
+  function handleSavePlant(plant) {
+    setPlants((prev) => {
+      const exists = prev.some((p) => p.id === plant.id);
+      return exists ? prev.map((p) => (p.id === plant.id ? plant : p)) : [...prev, plant];
+    });
+    closeModal();
+  }
+
+  function handleDeletePlant(id) {
+    setPlants((prev) => prev.filter((p) => p.id !== id));
+    closeModal();
+  }
+
+  function handleToggleReminders(id) {
+    setPlants((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, remindersEnabled: p.remindersEnabled === false } : p))
+    );
+  }
+
+  function handlePurchasePro() {
+    setPro({ owned: true });
+  }
+
+  // The single entry point for "water this plant now", routed through
+  // the two guard modals when relevant: RecommitModal if the plant is
+  // overdue and this due date hasn't been acknowledged yet, or
+  // OverwaterGuardModal if it's genuinely too early. Both funnel back
+  // into applyWatering() once confirmed.
+  function handleWaterRequest(plant, care) {
+    if (care.isOverdue && plant.lastAcknowledgedMiss !== care.dueKey) {
+      setRecommitTarget({ plant, care });
+      return;
+    }
+    if (care.daysUntilDue > 1) {
+      setOverwaterTarget({ plant, care });
+      return;
+    }
+    applyWatering(plant, care);
+  }
+
+  function applyWatering(plant, care) {
+    const key = todayKey();
+    // Already logged for today (e.g. "Water again" tapped a second time on
+    // the same plant, or confirmed through the overwater guard on a plant
+    // that was already watered today) — the data model only tracks one
+    // watering per calendar day, so this is a genuine no-op. Bail out
+    // before the celebration effects fire, otherwise the splash sound and
+    // confetti play as if something happened when nothing actually did.
+    if (plant.wateredDates.includes(key)) return;
+
+    setPlants((prev) =>
+      prev.map((p) => {
+        if (p.id !== plant.id) return p;
+        if (p.wateredDates.includes(key)) return p;
+        const wateredDates = [...p.wateredDates, key];
+        return { ...p, wateredDates, lastAcknowledgedMiss: care.isOverdue ? care.dueKey : p.lastAcknowledgedMiss };
+      })
+    );
+    playSplash();
+    setJustWateredId(plant.id);
+    setTimeout(() => setJustWateredId((cur) => (cur === plant.id ? null : cur)), 1400);
+
+    const newStreak = getCurrentCareStreak([...plant.wateredDates, key], plant.intervalDays || 7);
+    if (MILESTONES.includes(newStreak)) {
+      setMilestoneBanner(`🎉 ${plant.emoji} ${plant.name} — ${newStreak} on-time waterings in a row!`);
+      setTimeout(() => setMilestoneBanner(null), 3200);
+    }
+  }
+
+  function handleRecommitConfirm() {
+    if (recommitTarget) applyWatering(recommitTarget.plant, recommitTarget.care);
+    setRecommitTarget(null);
+  }
+
+  function handleOverwaterConfirm() {
+    if (overwaterTarget) applyWatering(overwaterTarget.plant, overwaterTarget.care);
+    setOverwaterTarget(null);
+  }
+
+  const thrivingCount = plants.filter((p) => {
+    const h = getCareInfo(p).health;
+    return h === "thriving" || h === "justWatered";
+  }).length;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🪴</span> Thirsty Leaves
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Thirsty Leaves Pro">
+            {pro.owned ? "⭐" : "👑"}
+          </button>
+          <button className="theme-toggle" onClick={toggleNotifications} aria-label="Toggle reminders">
+            {notifsEnabled ? "🔔" : "🔕"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">
+            💾
+          </button>
+        </div>
+      </header>
+
+      {plants.length === 0 ? (
+        <EmptyState onAdd={openAddModal} />
+      ) : (
+        <div className="plant-list">
+          <p className="stats-row">{thrivingCount} of {plants.length} plant{plants.length === 1 ? "" : "s"} thriving</p>
+          {plants.map((plant) => (
+            <PlantCard
+              key={plant.id}
+              plant={plant}
+              onWater={handleWaterRequest}
+              onEdit={openEditModal}
+              onDelete={handleDeletePlant}
+              onToggleReminders={handleToggleReminders}
+            />
+          ))}
+          {!pro.owned && (
+            <p className="free-tier-note">
+              Free plan: {plants.length} of {MAX_FREE_PLANTS} plants used.{" "}
+              <button className="link-btn" onClick={() => setUpgradeModalOpen(true)}>Go Pro for unlimited</button>
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="fab">
+        <button onClick={openAddModal}>+ Add plant</button>
+      </div>
+
+      {modalState.open && (
+        <PlantModal
+          plant={modalState.plant}
+          onSave={handleSavePlant}
+          onDelete={handleDeletePlant}
+          onClose={closeModal}
+        />
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal
+          pro={pro}
+          onPurchase={handlePurchasePro}
+          onClose={() => setUpgradeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && (
+        <BackupModal onClose={() => setBackupModalOpen(false)} />
+      )}
+
+      {recommitTarget && (
+        <RecommitModal
+          plant={recommitTarget.plant}
+          care={recommitTarget.care}
+          onConfirm={handleRecommitConfirm}
+          onCancel={() => setRecommitTarget(null)}
+        />
+      )}
+
+      {overwaterTarget && (
+        <OverwaterGuardModal
+          plant={overwaterTarget.plant}
+          care={overwaterTarget.care}
+          onConfirm={handleOverwaterConfirm}
+          onCancel={() => setOverwaterTarget(null)}
+        />
+      )}
+
+      {justWateredId && <Confetti />}
+
+      {reminder && (
+        <div className="milestone-banner reminder-banner">
+          🔔 {reminder.message}
+        </div>
+      )}
+
+      {milestoneBanner && (
+        <div className="milestone-banner">{milestoneBanner}</div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
