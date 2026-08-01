@@ -150,23 +150,34 @@ platform :ios do
       UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
     end
 
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
+
     begin
-      app = Spaceship::ConnectAPI::App.find(app_identifier)
-      version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
-
-      age_rating = version.fetch_age_rating_declaration
+      app_info = app.get_app_infos.first
+      UI.message("DIAG app_info class: #{app_info.class}")
+      UI.message("DIAG app_info methods (age): #{app_info.methods.grep(/age/i).sort}")
+      age_rating = app_info.fetch_age_rating_declaration
       UI.message("DIAG age_rating class: #{age_rating.class}")
-      UI.message("DIAG age_rating methods: #{age_rating.methods.grep(/update|attribute/i).sort}")
-      UI.message("DIAG age_rating params: #{age_rating.method(:update).parameters}") rescue UI.message("DIAG age_rating has no update method")
+      UI.message("DIAG age_rating update params: #{age_rating.method(:update).parameters}")
+    rescue => e
+      UI.message("DIAG age_rating probe failed: #{e.message}")
+    end
 
+    begin
       UI.message("DIAG AppPriceSchedule defined?: #{Spaceship::ConnectAPI.const_defined?(:AppPriceSchedule)}")
       UI.message("DIAG app.prices= params: #{app.method(:prices=).parameters}")
       UI.message("DIAG app fetch_app_prices params: #{app.method(:fetch_app_prices).parameters}")
+    rescue => e
+      UI.message("DIAG pricing probe failed: #{e.message}")
+    end
 
+    begin
       UI.message("DIAG ConnectAPI module methods (privacy): #{Spaceship::ConnectAPI.methods.grep(/privacy|data_usage/i).sort}")
       UI.message("DIAG ConnectAPI constants (privacy): #{Spaceship::ConnectAPI.constants.grep(/Privacy|DataUsage/i).sort}")
+      UI.message("DIAG app methods (privacy): #{app.methods.grep(/privacy|data_usage/i).sort}")
     rescue => e
-      UI.message("DIAG probe failed: #{e.message}\n#{e.backtrace.first(5).join("\n")}")
+      UI.message("DIAG privacy probe failed: #{e.message}")
     end
 
     # Manual release on purpose — even once Apple approves this, it should
