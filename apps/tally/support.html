@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Support — Tally</title>
+<style>
+  :root {
+    --bg: #05060a;
+    --text: #f3f5f7;
+    --text-dim: #93a0ad;
+    --border: rgba(255, 255, 255, 0.14);
+    --accent-1: #12e0d0;
+    --accent-2: #ff3c96;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #12151c, var(--bg));
+    color: var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 24px;
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    display: inline-block;
+  }
+  h2 {
+    font-size: 18px;
+    margin: 32px 0 8px;
+  }
+  p, li {
+    font-size: 15px;
+    color: var(--text);
+  }
+  a {
+    color: var(--accent-1);
+  }
+  .note {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 14px;
+    color: var(--text-dim);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🧾 Tally — Support</h1>
+
+<h2>My saved splits disappeared</h2>
+<p>All data is stored locally on your device only, nothing is backed up to a server. This means uninstalling the app, or clearing its storage from your phone's settings, permanently removes your saved splits and settings. Reinstalling a fresh copy of the app starts empty by design — there's no account to sign back into and recover it from. Use the Backup &amp; restore option (the 💾 icon in the header) beforehand if you want your own copy.</p>
+
+<h2>The math looks off</h2>
+<p>Tip amount is calculated on the bill subtotal you enter, and the per-person amount is the subtotal plus tip divided evenly across the number of people. If "Round up per person" is switched on, each person's share is rounded up to the next whole currency unit, which means the group collectively pays a little more than the exact total — that's intentional, for easier cash tipping, and the app tells you exactly how much extra that rounding collects. Even with "Round up" off, dividing evenly and rounding each share to the nearest cent can leave the group a cent or two short of (or over) the exact total whenever the bill doesn't divide evenly — Tally shows a note under the total whenever that happens, so it's never a silent surprise.</p>
+
+<h2>Can I split unevenly between people?</h2>
+<p>Not currently — Tally always splits the total evenly across the number of people you set. Uneven/itemized splitting (e.g. "Alex had the steak") isn't built yet.</p>
+
+<h2>What does Tally Pro unlock?</h2>
+<p>A few extra keypad accent colors, and removes the 5-saved-split cap on the free plan's history list. The core calculator — entering a bill, picking a tip, splitting between people — is always free and never limited.</p>
+
+<h2>Can I use this on more than one device?</h2>
+<p>Not yet — each installation keeps its own separate local data, with no sync between devices. You can move data between devices manually using Backup &amp; restore.</p>
+
+<h2>Something's broken, or I have a question not covered here</h2>
+<p>Email <a href="mailto:hotstreakhabits@gmail.com">hotstreakhabits@gmail.com</a> and describe what happened, including your phone model and iOS version if it's a display or crash issue.</p>
+
+<div class="note">See also the <a href="privacy.html">privacy policy</a> for details on what data the app does (and doesn't) collect.</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "Spendlog",
+  "short_name": "Spendlog",
+  "description": "A dead-simple personal expense logger — log a purchase in under 10 seconds, no bank linking, no login, everything stays on your device.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f1",
+  "theme_color": "#f4f7f1",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

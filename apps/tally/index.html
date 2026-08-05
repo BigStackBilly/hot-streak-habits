@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Tally</title>
+<meta name="theme-color" content="#05060a" />
+
+<!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
+     Inter for body text) — reused as-is per the "no new CDN deps" rule. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Tally" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly, no
+     build step needed. Has to stay an inline script (not a separate app.js)
+     so the page still works opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// TALLY — a bill-splitting and tip-calculating utility
+//
+// Enter a bill subtotal on a big thumb-friendly keypad, pick a tip (chips,
+// custom entry, or a slider — all three stay in sync), pick how many
+// people are splitting it, and watch the tip / total / per-person numbers
+// update live. No login, no backend, everything optional beyond the
+// calculator itself lives in localStorage under a "tally." prefix.
+//
+// Organized top to bottom as:
+//   1. Format helpers      - currency display, date keys
+//   2. Split math           - pure functions, no React
+//   3. localStorage helpers - defaults, currency, theme, cosmetics, history
+//   4. Small components (Keypad, TipPicker, PeopleStepper, ResultCard)
+//   5. SaveSplitModal         - optional "save this split" flow
+//   5b. HistoryModal            - review/delete saved splits
+//   5c. ThemeModal                - the cosmetic keypad-color + Pro shop
+//   5d. BackupModal                - free local export/import
+//   6. App                          - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect } = React;
+
+const DEFAULTS_KEY = "tally.defaults.v1";
+const CURRENCY_KEY = "tally.currency.v1";
+const THEME_KEY = "tally.theme.v1";
+const COSMETICS_KEY = "tally.cosmetics.v1";
+const HISTORY_KEY = "tally.history.v1";
+
+const TIP_CHIPS = [15, 18, 20, 25];
+const HISTORY_FREE_CAP = 5;
+const CURRENCIES = ["$", "€", "£", "¥", "₹"]; // $ € £ ¥ ₹
+
+// Cosmetic keypad-color packs. "signal" (cyan -> magenta) is the free
+// default; the rest are paid re-skins of the same --accent-1/--accent-2
+// gradient variables (see [data-pack="..."] rules in styles.css) — no
+// logic changes, just different numbers. Unlike the sibling apps, all
+// three paid packs unlock together behind one "Tally Pro" purchase (see
+// ThemeModal below) rather than being bought individually, since the
+// product brief bundles cosmetics + unlimited history into one unlock.
+const KEYPAD_PACKS = [
+  { id: "signal", name: "Signal", free: true, colors: ["#12e0d0", "#ff3c96"] },
+  { id: "lime", name: "Neon Lime", colors: ["#a6ff2e", "#00c2ff"] },
+  { id: "sunset", name: "Sunset Coral", colors: ["#ff9a3c", "#ff3c6e"] },
+  { id: "violet", name: "Deep Violet", colors: ["#8b5cf6", "#ff3ca8"] },
+];
+const PACK_BY_ID = Object.fromEntries(KEYPAD_PACKS.map((p) => [p.id, p]));
+
+// ---------------------------------------------------------------------
+// 1. FORMAT HELPERS
+// ---------------------------------------------------------------------
+
+function todayKey() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatMoney(amount, symbol) {
+  const safe = isFinite(amount) ? amount : 0;
+  return `${symbol}${safe.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatDateLabel(iso) {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+// ---------------------------------------------------------------------
+// 2. SPLIT MATH
+//
+// Pure, no React — takes the raw inputs and returns every number the UI
+// needs. Kept as one function so the display, the save-to-history flow,
+// and the eventual backup all agree on the exact same arithmetic.
+// ---------------------------------------------------------------------
+
+function clampPercent(v) {
+  if (!isFinite(v)) return 0;
+  return Math.max(0, Math.min(100, v));
+}
+
+function clampPeople(v) {
+  if (!isFinite(v)) return 1;
+  return Math.max(1, Math.min(50, Math.round(v)));
+}
+
+function computeSplit(subtotal, tipPercent, people, roundUp) {
+  const safeSubtotal = isFinite(subtotal) && subtotal > 0 ? subtotal : 0;
+  const safePeople = clampPeople(people);
+  const safeTip = clampPercent(tipPercent);
+
+  const tipAmount = Math.round(safeSubtotal * (safeTip / 100) * 100) / 100;
+  const total = Math.round((safeSubtotal + tipAmount) * 100) / 100;
+  const perPersonExact = Math.round((total / safePeople) * 100) / 100;
+  const perPersonDisplay = roundUp ? Math.ceil(perPersonExact) : perPersonExact;
+  const collected = Math.round(perPersonDisplay * safePeople * 100) / 100;
+  // Always compute the gap between what's collected and the actual total —
+  // even off the roundUp path, splitting evenly and rounding each share to
+  // the nearest cent can under- or over-collect by a cent or two whenever
+  // the total isn't evenly divisible by the number of people (e.g. $100
+  // split 3 ways is $33.33 x 3 = $99.99, a cent short). That gap used to
+  // only get surfaced when roundUp was on; now it's always available so the
+  // UI can disclose it either way instead of silently losing/gaining cents.
+  const overage = Math.round((collected - total) * 100) / 100;
+
+  return { subtotal: safeSubtotal, tipAmount, total, perPersonExact, perPersonDisplay, overage, people: safePeople };
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadDefaults() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DEFAULTS_KEY));
+    if (raw) return { tipPercent: clampPercent(raw.tipPercent ?? 18), people: clampPeople(raw.people ?? 2) };
+  } catch {}
+  return { tipPercent: 18, people: 2 };
+}
+
+function saveDefaults(defaults) {
+  localStorage.setItem(DEFAULTS_KEY, JSON.stringify(defaults));
+}
+
+function loadCurrency() {
+  const v = localStorage.getItem(CURRENCY_KEY);
+  return CURRENCIES.includes(v) ? v : "$";
+}
+
+// Dark "graphite + neon" is the natural default here — the crisp,
+// high-contrast calculator-LED identity is built for a dark field.
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "dark";
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { activePack: "signal", proOwned: false, shopViewed: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+function loadHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY));
+    if (Array.isArray(raw)) return raw;
+  } catch {}
+  return [];
+}
+
+function saveHistory(history) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+const KEYS = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "⌫"]; // last is backspace glyph
+
+function Keypad({ onKey }) {
+  return (
+    <div className="keypad">
+      {KEYS.map((k) => (
+        <button
+          key={k}
+          className={`keypad-btn ${k === "⌫" ? "keypad-back" : ""}`}
+          onClick={() => onKey(k)}
+          aria-label={k === "⌫" ? "Backspace" : k === "." ? "Decimal point" : `Digit ${k}`}
+        >
+          {k}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TipPicker({ tipPercent, onChange }) {
+  const isChipValue = TIP_CHIPS.includes(tipPercent);
+  const [customText, setCustomText] = useState(isChipValue ? "" : String(tipPercent));
+
+  // Keep the custom field's displayed text in sync when a chip or the
+  // slider drives tipPercent back onto (or off of) an exact chip value.
+  useEffect(() => {
+    setCustomText(isChipValue ? "" : String(tipPercent));
+  }, [tipPercent, isChipValue]);
+
+  function handleCustomChange(e) {
+    const text = e.target.value;
+    setCustomText(text);
+    const num = parseFloat(text);
+    if (!isNaN(num)) onChange(clampPercent(num));
+  }
+
+  return (
+    <div className="tip-picker">
+      <div className="tip-chip-row">
+        {TIP_CHIPS.map((v) => (
+          <button
+            key={v}
+            className={`tip-chip ${tipPercent === v ? "selected" : ""}`}
+            onClick={() => onChange(v)}
+          >
+            {v}%
+          </button>
+        ))}
+        <input
+          className={`tip-chip tip-custom-input ${!isChipValue && customText ? "selected" : ""}`}
+          placeholder="Custom"
+          inputMode="decimal"
+          value={customText}
+          onChange={handleCustomChange}
+        />
+      </div>
+      <input
+        type="range"
+        className="tip-slider"
+        min="0"
+        max="50"
+        step="1"
+        value={Math.min(50, Math.round(tipPercent))}
+        onChange={(e) => onChange(clampPercent(Number(e.target.value)))}
+        aria-label="Tip percentage slider"
+      />
+      <div className="tip-slider-label">{tipPercent}% tip</div>
+    </div>
+  );
+}
+
+function PeopleStepper({ people, onChange }) {
+  return (
+    <div className="stepper">
+      <button
+        className="stepper-btn"
+        onClick={() => onChange(clampPeople(people - 1))}
+        aria-label="Fewer people"
+        disabled={people <= 1}
+      >
+        −
+      </button>
+      <div className="stepper-value">
+        <span className="stepper-num">{people}</span>
+        <span className="stepper-label">{people === 1 ? "person" : "people"}</span>
+      </div>
+      <button className="stepper-btn" onClick={() => onChange(clampPeople(people + 1))} aria-label="More people">
+        +
+      </button>
+    </div>
+  );
+}
+
+function ResultCard({ split, currency, roundUp, onToggleRoundUp, onSave, canSave }) {
+  return (
+    <div className="result-card">
+      <div className="result-row">
+        <span className="result-label">Tip</span>
+        <span className="result-value">{formatMoney(split.tipAmount, currency)}</span>
+      </div>
+      <div className="result-row result-total">
+        <span className="result-label">Total</span>
+        <span className="result-value">{formatMoney(split.total, currency)}</span>
+      </div>
+      <div className="result-row result-per-person">
+        <span className="result-label">Per person ({split.people})</span>
+        <span className="result-value result-value-big">{formatMoney(split.perPersonDisplay, currency)}</span>
+      </div>
+
+      {roundUp && split.overage > 0.004 && (
+        <p className="round-note">
+          Rounded up to the nearest {currency}1 — collects {formatMoney(split.overage, currency)} extra in total.
+        </p>
+      )}
+
+      {!roundUp && Math.abs(split.overage) > 0.004 && (
+        <p className="round-note">
+          Splitting evenly leaves a rounding {split.overage < 0 ? "shortfall" : "surplus"} of{" "}
+          {formatMoney(Math.abs(split.overage), currency)} — one person may need to pay a cent{" "}
+          {split.overage < 0 ? "more" : "less"} to match the total exactly.
+        </p>
+      )}
+
+      <label className="toggle-row">
+        <span>Round up per person</span>
+        <span className={`toggle-switch ${roundUp ? "on" : ""}`} onClick={() => onToggleRoundUp(!roundUp)}>
+          <span className="toggle-knob" />
+        </span>
+      </label>
+
+      <button className="btn btn-secondary save-split-btn" onClick={onSave} disabled={!canSave}>
+        Save this split
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. SAVE SPLIT MODAL
+//
+// Genuinely optional/secondary, per the product brief — the primary
+// experience is the live calculator above, not journaling every bill.
+// ---------------------------------------------------------------------
+
+function SaveSplitModal({ split, currency, tipPercent, roundUp, atCap, onSave, onOpenShop, onClose }) {
+  const [note, setNote] = useState("");
+
+  if (atCap) {
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+          <h2>Free history is full</h2>
+          <p className="modal-subtitle">
+            The free plan keeps your last {HISTORY_FREE_CAP} saved splits. Unlock Tally Pro for unlimited history, or
+            delete an old one from your history list to make room.
+          </p>
+          <div className="modal-buttons">
+            <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            <button className="btn btn-primary" onClick={onOpenShop}>See Tally Pro</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Save this split</h2>
+        <p className="modal-subtitle">
+          {formatMoney(split.total, currency)} total · {tipPercent}% tip · {split.people} {split.people === 1 ? "person" : "people"} · {formatMoney(split.perPersonDisplay, currency)} each
+          {roundUp ? " (rounded up)" : ""}
+        </p>
+        <input
+          className="text-input"
+          placeholder="Venue or note (optional)"
+          maxLength={40}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          autoFocus
+        />
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => onSave(note.trim())}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5b. HISTORY MODAL
+// ---------------------------------------------------------------------
+
+function HistoryModal({ history, proOwned, onDelete, onClose }) {
+  const sorted = [...history].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Saved splits</h2>
+
+        {!proOwned && (
+          <p className="modal-subtitle">
+            {history.length} of {HISTORY_FREE_CAP} free saves used.
+          </p>
+        )}
+
+        {sorted.length === 0 ? (
+          <p className="modal-subtitle">Nothing saved yet — tap "Save this split" on the calculator to keep one here.</p>
+        ) : (
+          <div className="history-list">
+            {sorted.map((h) => (
+              <div className="history-item" key={h.id}>
+                <div className="history-item-main">
+                  <span className="history-item-title">{h.note || "Split"}</span>
+                  <span className="history-item-date">{formatDateLabel(h.createdAt)}</span>
+                </div>
+                <div className="history-item-figures">
+                  <span>{formatMoney(h.total, h.currency)} total</span>
+                  <span>{h.tipPercent}% tip</span>
+                  <span>{formatMoney(h.perPerson, h.currency)} × {h.people}</span>
+                </div>
+                <button className="history-delete" onClick={() => onDelete(h.id)} aria-label="Delete saved split">
+                  {"\u{1F5D1}"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5c. THEME + PRO SHOP
+//
+// "Buying" Pro right now only sets cosmetics.proOwned locally — there's
+// no real payment processor wired in yet, which the modal's footer note
+// is upfront about, exactly like the sibling apps' ThemeModal. The
+// calculator itself (entering a bill, picking a tip, splitting between
+// people) is never gated — only the extra keypad colors and the history
+// cap beyond HISTORY_FREE_CAP are.
+// ---------------------------------------------------------------------
+
+function ThemeModal({ cosmetics, onSelectPack, onUnlockPro, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Tally Pro</h2>
+        <div className="theme-grid">
+          {KEYPAD_PACKS.map((pack) => {
+            const locked = !pack.free && !cosmetics.proOwned;
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""} ${locked ? "locked" : ""}`}
+                onClick={() => (locked ? onUnlockPro() : onSelectPack(pack.id))}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.colors[0]}, ${pack.colors[1]})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">{active ? "Active" : locked ? "Pro" : "Free"}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="pro-callout">
+          <p className="pro-callout-title">{cosmetics.proOwned ? "You have Tally Pro" : "Unlock Tally Pro — $2.99"}</p>
+          <ul className="pro-callout-list">
+            <li>3 extra keypad accent colors</li>
+            <li>Unlimited saved splits (free plan keeps the last {HISTORY_FREE_CAP})</li>
+          </ul>
+          {!cosmetics.proOwned && (
+            <button className="btn btn-primary" style={{ width: "100%" }} onClick={onUnlockPro}>
+              Unlock everything
+            </button>
+          )}
+        </div>
+
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch. The calculator
+          itself is always free and never limited.
+        </p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5d. BACKUP MODAL
+//
+// A genuinely free, always-available export/import of the raw "tally.*"
+// localStorage keys as one JSON file, kept fully offline (no network
+// calls) and deliberately NOT gated behind ThemeModal — your own data
+// recovery should never be a paid feature. Mirrors the sibling apps'
+// BackupModal exactly.
+// ---------------------------------------------------------------------
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("tally.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = {
+      app: "tally",
+      exportedAt: new Date().toISOString(),
+      data: collectBackupData(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tally-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // reset so choosing the same file again still fires onChange
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "tally" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Tally backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("tally.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="modal-subtitle">
+          Save your settings and saved splits to a file on this device, or bring them back after a lost or reinstalled phone.
+        </p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && <p className="error-text">{error}</p>}
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const initialDefaults = loadDefaults();
+  const [subtotalText, setSubtotalText] = useState("");
+  const [tipPercent, setTipPercent] = useState(initialDefaults.tipPercent);
+  const [people, setPeople] = useState(initialDefaults.people);
+  const [roundUp, setRoundUp] = useState(false);
+  const [currency, setCurrency] = useState(loadCurrency);
+  const [theme, setTheme] = useState(loadTheme);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [history, setHistory] = useState(loadHistory);
+
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [themeModalOpen, setThemeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [savedToast, setSavedToast] = useState(false);
+
+  // Persist last-used tip% and person count as sensible defaults for
+  // next time — a small local convenience, not a real data model.
+  useEffect(() => {
+    saveDefaults({ tipPercent, people });
+  }, [tipPercent, people]);
+
+  useEffect(() => {
+    localStorage.setItem(CURRENCY_KEY, currency);
+  }, [currency]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "signal") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  useEffect(() => {
+    saveHistory(history);
+  }, [history]);
+
+  function appendDigit(d) {
+    setSubtotalText((prev) => {
+      if (d === ".") {
+        if (prev.includes(".")) return prev;
+        return prev === "" ? "0." : prev + ".";
+      }
+      if (prev.includes(".")) {
+        const decimals = prev.split(".")[1];
+        if (decimals.length >= 2) return prev; // cap at cents
+      }
+      if (prev === "0") return d; // no leading zeros
+      if (prev.replace(".", "").length >= 8) return prev; // sane cap
+      return prev + d;
+    });
+  }
+
+  function handleKey(k) {
+    if (k === "⌫") {
+      setSubtotalText((prev) => prev.slice(0, -1));
+    } else {
+      appendDigit(k);
+    }
+  }
+
+  function cycleCurrency() {
+    setCurrency((prev) => CURRENCIES[(CURRENCIES.indexOf(prev) + 1) % CURRENCIES.length]);
+  }
+
+  function handleSaveSplit(note) {
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      note,
+      subtotal: split.subtotal,
+      tipPercent,
+      tipAmount: split.tipAmount,
+      total: split.total,
+      people: split.people,
+      perPerson: split.perPersonDisplay,
+      roundUp,
+      currency,
+      createdAt: new Date().toISOString(),
+    };
+    setHistory((prev) => [entry, ...prev]);
+    setSaveModalOpen(false);
+    setSavedToast(true);
+    setTimeout(() => setSavedToast(false), 1800);
+  }
+
+  function handleDeleteHistory(id) {
+    setHistory((prev) => prev.filter((h) => h.id !== id));
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+
+  function handleUnlockPro() {
+    setCosmetics((prev) => ({ ...prev, proOwned: true }));
+  }
+
+  function openThemeModal() {
+    setThemeModalOpen(true);
+    setCosmetics((prev) => (prev.shopViewed ? prev : { ...prev, shopViewed: true }));
+  }
+
+  const subtotalNum = parseFloat(subtotalText) || 0;
+  const split = computeSplit(subtotalNum, tipPercent, people, roundUp);
+  const atCap = !cosmetics.proOwned && history.length >= HISTORY_FREE_CAP;
+  const activePackObj = PACK_BY_ID[cosmetics.activePack] || PACK_BY_ID.signal;
+  const isPaidPack = activePackObj.id !== "signal";
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className={`receipt-icon ${isPaidPack ? `pack-${activePackObj.id}` : ""}`}>{"\u{1F9FE}"}</span>
+          Tally
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={cycleCurrency} aria-label="Change currency">
+            {currency}
+          </button>
+          <button className="theme-toggle" onClick={() => setHistoryModalOpen(true)} aria-label="Saved splits">
+            {"\u{1F4CB}"}
+          </button>
+          <button className="theme-toggle" onClick={openThemeModal} aria-label="Tally Pro">
+            {"\u{1F3A8}"}
+            {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">
+            {"\u{1F4BE}"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? "☀️" : "\u{1F319}"}
+          </button>
+        </div>
+      </header>
+
+      <div className="calc-scroll">
+        <div className="bill-display">
+          <div className="bill-display-label">Bill subtotal</div>
+          <div className="bill-amount-row">
+            <span className="currency-symbol">{currency}</span>
+            <span className="bill-amount">{subtotalText || "0"}</span>
+          </div>
+        </div>
+
+        <Keypad onKey={handleKey} />
+
+        <section className="section-block">
+          <div className="section-label">Tip</div>
+          <TipPicker tipPercent={tipPercent} onChange={setTipPercent} />
+        </section>
+
+        <section className="section-block">
+          <div className="section-label">Split between</div>
+          <PeopleStepper people={people} onChange={setPeople} />
+        </section>
+
+        <ResultCard
+          split={split}
+          currency={currency}
+          roundUp={roundUp}
+          onToggleRoundUp={setRoundUp}
+          onSave={() => setSaveModalOpen(true)}
+          canSave={subtotalNum > 0}
+        />
+      </div>
+
+      {saveModalOpen && (
+        <SaveSplitModal
+          split={split}
+          currency={currency}
+          tipPercent={tipPercent}
+          roundUp={roundUp}
+          atCap={atCap}
+          onSave={handleSaveSplit}
+          onOpenShop={() => { setSaveModalOpen(false); openThemeModal(); }}
+          onClose={() => setSaveModalOpen(false)}
+        />
+      )}
+
+      {historyModalOpen && (
+        <HistoryModal
+          history={history}
+          proOwned={cosmetics.proOwned}
+          onDelete={handleDeleteHistory}
+          onClose={() => setHistoryModalOpen(false)}
+        />
+      )}
+
+      {themeModalOpen && (
+        <ThemeModal
+          cosmetics={cosmetics}
+          onSelectPack={handleSelectPack}
+          onUnlockPro={handleUnlockPro}
+          onClose={() => setThemeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+
+      {savedToast && <div className="milestone-banner">Split saved</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app. Silently no-ops over file:// or plain http, since
+  // both require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,774 @@
+/* ===================================================================
+   TALLY — visual identity
+   A near-black "graphite" base with a crisp cyan -> magenta "signal"
+   gradient accent — meant to read as an LED calculator display, not a
+   finance/money app. Deliberately distinct from the sibling apps' warm
+   ember (orange/gold) and night-sky (blue/violet) palettes, and from
+   spendlog's money-green territory.
+   =================================================================== */
+
+:root {
+  --bg-top: #12151c;
+  --bg-bottom: #05060a;
+  --surface: rgba(255, 255, 255, 0.06);
+  --surface-2: rgba(255, 255, 255, 0.11);
+  --text: #f3f5f7;
+  --text-dim: #93a0ad;
+  --border: rgba(255, 255, 255, 0.13);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+
+  --accent-1: #12e0d0;
+  --accent-2: #ff3c96;
+  --accent-gradient: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  --danger: #ff5470;
+
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+}
+
+[data-theme="light"] {
+  --bg-top: #eef1f6;
+  --bg-bottom: #ffffff;
+  --surface: rgba(10, 14, 20, 0.045);
+  --surface-2: rgba(10, 14, 20, 0.08);
+  --text: #171a21;
+  --text-dim: #626c78;
+  --border: rgba(20, 24, 32, 0.12);
+  --shadow: 0 2px 16px rgba(30, 40, 60, 0.1);
+}
+
+/* Cosmetic keypad-color packs (see KEYPAD_PACKS in index.html) — each
+   just swaps the accent gradient stops, so the tip chips, stepper,
+   result numbers, toggle, and FAB-equivalents all re-color for free. */
+[data-pack="lime"] { --accent-1: #a6ff2e; --accent-2: #00c2ff; }
+[data-pack="sunset"] { --accent-1: #ff9a3c; --accent-2: #ff3c6e; }
+[data-pack="violet"] { --accent-1: #8b5cf6; --accent-2: #ff3ca8; }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  background-attachment: fixed;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+button {
+  font-family: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---------- Header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+  gap: 8px;
+}
+
+.app-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.receipt-icon {
+  filter: drop-shadow(0 2px 4px rgba(18, 224, 208, 0.45));
+  display: inline-flex;
+}
+
+/* Owned/active PAID packs recolor the actual receipt emoji via
+   hue-rotate instead of custom artwork — emoji glyphs are fixed-color
+   bitmaps `color` can't touch, but `filter` operates on rendered pixels
+   regardless of source, so the shape stays legible with a shifted tint.
+   The free Signal pack is untouched. */
+.receipt-icon.pack-lime { filter: hue-rotate(70deg) saturate(1.5) drop-shadow(0 2px 4px rgba(166, 255, 46, 0.4)); }
+.receipt-icon.pack-sunset { filter: hue-rotate(300deg) saturate(1.4) drop-shadow(0 2px 4px rgba(255, 154, 60, 0.4)); }
+.receipt-icon.pack-violet { filter: hue-rotate(220deg) saturate(1.5) drop-shadow(0 2px 4px rgba(139, 92, 246, 0.4)); }
+
+.header-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.theme-toggle {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+
+.unread-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--bg-bottom);
+}
+
+/* ---------- Calculator scroll area ---------- */
+
+.calc-scroll {
+  flex: 1;
+  padding: 4px 18px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+}
+
+/* ---------- Bill display ---------- */
+
+.bill-display {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  box-shadow: var(--shadow);
+}
+
+.bill-display-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.bill-amount-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.currency-symbol {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 700;
+  font-size: 26px;
+  color: var(--text-dim);
+}
+
+.bill-amount {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 42px;
+  letter-spacing: 0.01em;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  word-break: break-all;
+}
+
+/* ---------- Keypad ---------- */
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.keypad-btn {
+  min-height: 56px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 20px;
+  font-weight: 700;
+  font-family: 'Baloo 2', sans-serif;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.keypad-btn:active {
+  transform: scale(0.94);
+  background: var(--surface-2);
+}
+
+.keypad-back {
+  font-size: 18px;
+  color: var(--danger);
+}
+
+/* ---------- Section blocks (tip, people) ---------- */
+
+.section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.section-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Tip picker ---------- */
+
+.tip-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tip-chip-row {
+  display: flex;
+  gap: 8px;
+}
+
+.tip-chip {
+  flex: 1;
+  min-height: 46px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  font-weight: 700;
+  font-size: 15px;
+  text-align: center;
+  color: var(--text);
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.15s ease, border-color 0.15s ease;
+}
+
+.tip-chip.selected {
+  background: color-mix(in srgb, var(--accent-1) 22%, transparent);
+  border-color: var(--accent-1);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-1) 45%, transparent);
+  transform: scale(1.04);
+}
+
+.tip-custom-input {
+  min-width: 0;
+  padding: 0 6px;
+  font-family: inherit;
+}
+
+.tip-custom-input::placeholder {
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.tip-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--surface-2);
+  accent-color: var(--accent-1);
+}
+
+.tip-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.tip-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent-gradient);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.tip-slider-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+  font-weight: 600;
+}
+
+/* ---------- People stepper ---------- */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+}
+
+.stepper-btn {
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  font-size: 26px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease;
+}
+
+.stepper-btn:active {
+  transform: scale(0.92);
+}
+
+.stepper-btn:disabled {
+  opacity: 0.35;
+}
+
+.stepper-value {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 70px;
+}
+
+.stepper-num {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 800;
+  font-size: 30px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.stepper-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* ---------- Result card ---------- */
+
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.result-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.result-label {
+  font-size: 14px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.result-value {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.result-total .result-value {
+  font-size: 22px;
+}
+
+.result-per-person {
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.result-value-big {
+  font-size: 30px;
+  font-weight: 800;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.round-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: -2px 0 0;
+  line-height: 1.4;
+}
+
+/* ---------- Round-up toggle ---------- */
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+  padding-top: 6px;
+  cursor: pointer;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: background 0.2s ease;
+}
+
+.toggle-switch.on {
+  background: var(--accent-gradient);
+  border-color: transparent;
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.toggle-switch.on .toggle-knob {
+  transform: translateX(18px);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  flex: 1;
+  min-height: 48px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: #0a0b10;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.save-split-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.save-split-btn:disabled {
+  opacity: 0.4;
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 2, 6, 0.6);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 30;
+  animation: fade-in 0.15s ease;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-sheet {
+  background: var(--bg-bottom);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--bg-top) 55%, var(--bg-bottom)), var(--bg-bottom));
+  width: 100%;
+  max-width: 480px;
+  border-radius: 24px 24px 0 0;
+  padding: 20px 20px max(24px, env(safe-area-inset-bottom));
+  max-height: 88vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-sheet h2 {
+  font-family: 'Baloo 2', sans-serif;
+  font-size: 20px;
+  margin: 4px 0 12px;
+}
+
+.modal-subtitle {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0 0 16px;
+}
+
+.text-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  margin-bottom: 16px;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent-1);
+}
+
+.text-input::placeholder {
+  color: var(--text-dim);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* ---------- History list ---------- */
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.history-item {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 44px 12px 14px;
+}
+
+.history-item-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.history-item-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.history-item-date {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.history-item-figures {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.history-delete {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  background: var(--surface-2);
+}
+
+/* ---------- Theme / Pro shop ---------- */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+}
+
+.theme-option.selected {
+  border-color: var(--accent-1);
+}
+
+.theme-option.locked {
+  opacity: 0.6;
+}
+
+.theme-swatch {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.theme-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.theme-status {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.pro-callout {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.pro-callout-title {
+  font-family: 'Baloo 2', sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.pro-callout-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+  margin: 4px 0 18px;
+}
+
+/* ---------- Toast ---------- */
+
+.milestone-banner {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent-gradient);
+  color: #0a0b10;
+  padding: 12px 20px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(18, 224, 208, 0.35);
+  z-index: 50;
+  animation: banner-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
+}
+
+@keyframes banner-in {
+  from { transform: translate(-50%, -20px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 360px) {
+  .app-title { font-size: 20px; }
+  .theme-toggle { width: 36px; height: 36px; font-size: 14px; }
+  .bill-amount { font-size: 36px; }
+}

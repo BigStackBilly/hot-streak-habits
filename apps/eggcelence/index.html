@@ -818,7 +818,14 @@ function TimerView({ timer, onDone, onCancel }) {
         <div className="timer-done-glyph">
           {timer.style !== "custom" ? <PresetGlyph preset={timer} /> : <span style={{ fontSize: 40 }}>🥚</span>}
         </div>
-        <button className="btn btn-primary" style={{ marginTop: 28, minWidth: 200, flex: "none" }} onClick={() => onDone(timer)}>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: 28, minWidth: 200, flex: "none" }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDone(timer);
+          }}
+        >
           Nice — back to eggs
         </button>
       </div>

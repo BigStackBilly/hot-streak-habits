@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Spendlog</title>
+<meta name="theme-color" content="#f4f7f1" />
+
+<!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
+     Inter for body text) — reused as-is per the "no new CDN deps" rule. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for the offline app shell working via sw.js. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Spendlog" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Has to stay an inline script (not a separate
+     app.js) so the page still works opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// SPENDLOG — a dead-simple personal expense logger
+//
+// No bank linking, no login, no cloud sync. The hook is speed: a big
+// custom numeric keypad + a category chip grid gets a purchase logged in
+// well under 10 seconds. Everything lives in localStorage under the
+// "spendlog." prefix.
+//
+// Deliberately NOT built around a daily streak — people don't spend
+// money every single day, so a "you broke your streak" mechanic would
+// feel dishonest here, unlike the habit-tracking sibling apps. The one
+// light stat offered is "X entries logged this month."
+//
+// Organized top to bottom as:
+//   1. Format & date helpers   - money formatting, day/week/month windows
+//   2. localStorage helpers    - entries, categories, currency, theme, pro
+//   3. Category & totals math  - merging categories, monthly breakdown
+//   4. CSV export               - real client-side .csv generation
+//   5. Small presentational components (EmptyState, EntryRow)
+//   6. NumericKeypad             - the big thumb-friendly digit pad
+//   7. EntryModal                  - add/edit flow: amount -> category -> note
+//   7b. BreakdownSection            - this month's category % bars
+//   7c. ShopModal                    - Pro stub: custom categories + CSV export
+//   7d. SettingsModal                 - currency symbol picker
+//   7e. BackupModal                    - free local export/import of everything
+//   8. App                              - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect } = React;
+
+const ENTRIES_KEY = "spendlog.entries.v1";
+const CATEGORIES_KEY = "spendlog.categories.v1";
+const CURRENCY_KEY = "spendlog.currency.v1";
+const THEME_KEY = "spendlog.theme.v1";
+const COSMETICS_KEY = "spendlog.cosmetics.v1";
+
+const PRO_PRICE = "$2.99";
+
+// The seven free starter categories. Fixed set on the free tier — Pro
+// adds unlimited custom ones on top, never replaces these.
+const DEFAULT_CATEGORIES = [
+  { id: "food", icon: "🍔", label: "Food", color: "#dba545" },
+  { id: "transport", icon: "🚗", label: "Transport", color: "#5b9bd5" },
+  { id: "shopping", icon: "🛍️", label: "Shopping", color: "#c77dff" },
+  { id: "home", icon: "🏠", label: "Home", color: "#2f8f5b" },
+  { id: "fun", icon: "🎉", label: "Fun", color: "#ff8fa3" },
+  { id: "health", icon: "💊", label: "Health", color: "#ff6b6b" },
+  { id: "other", icon: "📦", label: "Other", color: "#9aa5b1" },
+];
+
+const PRESET_CATEGORY_COLORS = [
+  "#2f8f5b", "#dba545", "#5b9bd5", "#c77dff",
+  "#ff8fa3", "#ff6b6b", "#4fb286", "#9aa5b1",
+];
+
+// ---------------------------------------------------------------------
+// 1. FORMAT & DATE HELPERS
+//
+// Same approach as the sibling apps: build "YYYY-MM-DD" keys manually
+// from getFullYear/getMonth/getDate (the browser's LOCAL timezone)
+// rather than toISOString(), which converts to UTC first and can
+// silently roll a late-evening purchase over to the wrong calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+function formatMoney(cents, symbol) {
+  const value = (cents / 100).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${symbol}${value}`;
+}
+
+// Monday-start calendar week containing `date`, returned as [start, end)
+// millisecond boundaries.
+function getWeekRange(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dayIndex = (d.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  d.setDate(d.getDate() - dayIndex);
+  const start = d.getTime();
+  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7).getTime();
+  return [start, end];
+}
+
+function isTodayTs(ts) {
+  return toDateKey(new Date(ts)) === todayKey();
+}
+
+function isThisWeekTs(ts) {
+  const [start, end] = getWeekRange(new Date());
+  return ts >= start && ts < end;
+}
+
+function isThisMonthTs(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+}
+
+function sumEntries(entries, predicate) {
+  return entries.reduce((sum, e) => (predicate(e) ? sum + e.amountCents : sum), 0);
+}
+
+function relativeTime(ts) {
+  const diffMs = Date.now() - ts;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Lightweight locale-based guess at a sensible default currency symbol —
+// not a full currency-conversion system, just a nicer first-run default
+// than always assuming "$". Falls back to "$" for anything unrecognized.
+function guessCurrencySymbol() {
+  try {
+    const locale = navigator.language || "en-US";
+    const region = (locale.split("-")[1] || "").toUpperCase();
+    if (region === "GB") return "£";
+    if (region === "JP") return "¥";
+    if (region === "IN") return "₹";
+    const EURO_REGIONS = ["DE", "FR", "ES", "IT", "NL", "BE", "AT", "PT", "IE", "FI", "GR", "LU", "SK", "SI", "EE", "LV", "LT", "CY", "MT"];
+    if (EURO_REGIONS.includes(region)) return "€";
+    return "$";
+  } catch {
+    return "$";
+  }
+}
+
+// ---------------------------------------------------------------------
+// 2. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadEntries() {
+  try {
+    const raw = localStorage.getItem(ENTRIES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveEntries(entries) {
+  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+}
+
+function loadCustomCategories() {
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomCategories(cats) {
+  localStorage.setItem(CATEGORIES_KEY, JSON.stringify(cats));
+}
+
+function loadCurrency() {
+  return localStorage.getItem(CURRENCY_KEY) || guessCurrencySymbol();
+}
+
+// Light, clean "ledger" default — distinct on purpose from the sibling
+// apps' warm-cream and night-sky defaults.
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { pro: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+// ---------------------------------------------------------------------
+// 3. CATEGORY & TOTALS MATH
+// ---------------------------------------------------------------------
+
+function getMonthBreakdown(entries, categories) {
+  const monthEntries = entries.filter((e) => isThisMonthTs(e.timestamp));
+  const total = monthEntries.reduce((s, e) => s + e.amountCents, 0);
+  const byCat = {};
+  monthEntries.forEach((e) => {
+    byCat[e.category] = (byCat[e.category] || 0) + e.amountCents;
+  });
+  const rows = Object.entries(byCat)
+    .map(([catId, cents]) => {
+      const cat = categories.find((c) => c.id === catId) || { id: catId, icon: "❓", label: "Deleted category", color: "#9aa5b1" };
+      return { ...cat, cents, pct: total ? Math.round((cents / total) * 100) : 0 };
+    })
+    .sort((a, b) => b.cents - a.cents);
+  return { rows, total, count: monthEntries.length };
+}
+
+// ---------------------------------------------------------------------
+// 4. CSV EXPORT
+//
+// A real, working client-side export — the "purchase" that unlocks it
+// is a stub, but the file it produces is genuine.
+// ---------------------------------------------------------------------
+
+function csvEscape(value) {
+  const s = String(value === undefined || value === null ? "" : value);
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function exportEntriesCSV(entries, categories, currencySymbol) {
+  const header = ["Date", "Time", "Amount", "Currency", "Category", "Note"];
+  const sorted = entries.slice().sort((a, b) => a.timestamp - b.timestamp);
+  const rows = sorted.map((e) => {
+    const d = new Date(e.timestamp);
+    const cat = categories.find((c) => c.id === e.category);
+    return [
+      toDateKey(d),
+      d.toLocaleTimeString(),
+      (e.amountCents / 100).toFixed(2),
+      currencySymbol,
+      cat ? cat.label : "Deleted category",
+      e.note || "",
+    ];
+  });
+  const lines = [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\r\n");
+  const blob = new Blob([lines], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `spendlog-export-${todayKey()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState() {
+  return (
+    <div className="empty-state">
+      <div className="emoji">🧾</div>
+      <h2>No expenses yet</h2>
+      <p>Tap the + button to log your first purchase — it takes about 10 seconds.</p>
+    </div>
+  );
+}
+
+function EntryRow({ entry, category, currencySymbol, onTap }) {
+  return (
+    <button className="entry-row" onClick={() => onTap(entry.id)}>
+      <span className="entry-icon" style={{ background: `color-mix(in srgb, ${category.color} 24%, transparent)` }}>
+        {category.icon}
+      </span>
+      <span className="entry-main">
+        <span className="entry-top">
+          <span className="entry-category">{category.label}</span>
+          <span className="entry-amount">{formatMoney(entry.amountCents, currencySymbol)}</span>
+        </span>
+        <span className="entry-bottom">
+          <span className="entry-note">{entry.note || " "}</span>
+          <span className="entry-time">{relativeTime(entry.timestamp)}</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. NUMERIC KEYPAD
+//
+// A big custom pad instead of the OS keyboard — POS-style entry, where
+// each digit shifts in from the right (type "1250" -> $12.50). No
+// decimal key needed; it's faster this way and matches how cash-register
+// apps work.
+// ---------------------------------------------------------------------
+
+function NumericKeypad({ onDigit, onDoubleZero, onBackspace }) {
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "⌫"];
+  return (
+    <div className="keypad">
+      {keys.map((k) => (
+        <button
+          key={k}
+          type="button"
+          className={`keypad-key ${k === "⌫" ? "keypad-key-back" : ""}`}
+          onClick={() => {
+            if (k === "⌫") onBackspace();
+            else if (k === "00") onDoubleZero();
+            else onDigit(k);
+          }}
+          aria-label={k === "⌫" ? "Backspace" : k}
+        >
+          {k}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. ENTRY MODAL — the whole add/edit flow
+//
+// Steps: "amount" (keypad) -> "details" (category grid + optional note)
+// -> Save. Editing a past entry opens straight to "details" (tapping the
+// amount recap jumps back to the keypad). A third step, "addCategory",
+// is a small inline form for Pro users to mint a custom icon+label+color
+// category without leaving the flow.
+// ---------------------------------------------------------------------
+
+function EntryModal({ mode, initialEntry, categories, isPro, currencySymbol, onSave, onDelete, onClose, onAddCategory, onOpenShop }) {
+  const [step, setStep] = useState(mode === "edit" ? "details" : "amount");
+  const [digits, setDigits] = useState(initialEntry ? String(initialEntry.amountCents) : "");
+  const [category, setCategory] = useState(initialEntry ? initialEntry.category : null);
+  const [note, setNote] = useState(initialEntry ? initialEntry.note || "" : "");
+  const [newIcon, setNewIcon] = useState("🏷️");
+  const [newLabel, setNewLabel] = useState("");
+  const [newColor, setNewColor] = useState(PRESET_CATEGORY_COLORS[0]);
+
+  const amountCents = digits ? parseInt(digits, 10) : 0;
+
+  function pressDigit(d) {
+    setDigits((prev) => {
+      const base = prev === "0" ? "" : prev;
+      const next = base + d;
+      return next.length > 7 ? prev : next; // cap around $99,999.99
+    });
+  }
+
+  function pressDoubleZero() {
+    setDigits((prev) => {
+      if (!prev) return prev; // no leading "00"
+      const next = prev + "00";
+      return next.length > 7 ? prev : next;
+    });
+  }
+
+  function backspace() {
+    setDigits((prev) => prev.slice(0, -1));
+  }
+
+  function handleSaveCategory() {
+    if (!newLabel.trim()) return;
+    const cat = {
+      id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      icon: newIcon.trim() || "🏷️",
+      label: newLabel.trim().slice(0, 20),
+      color: newColor,
+      custom: true,
+    };
+    onAddCategory(cat);
+    setCategory(cat.id);
+    setNewLabel("");
+    setStep("details");
+  }
+
+  function handleSave() {
+    if (!category || amountCents <= 0) return;
+    onSave({
+      id: initialEntry ? initialEntry.id : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      amountCents,
+      category,
+      note: note.trim(),
+      timestamp: initialEntry ? initialEntry.timestamp : Date.now(),
+    });
+  }
+
+  if (step === "amount") {
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-sheet entry-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="amount-display">{formatMoney(amountCents, currencySymbol)}</div>
+          <NumericKeypad onDigit={pressDigit} onDoubleZero={pressDoubleZero} onBackspace={backspace} />
+          <div className="modal-buttons">
+            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" disabled={amountCents <= 0} onClick={() => setStep("details")}>
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === "addCategory") {
+    return (
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-sheet entry-sheet" onClick={(e) => e.stopPropagation()}>
+          <h2>New category</h2>
+          <div className="new-cat-row">
+            <input
+              className="emoji-input"
+              value={newIcon}
+              maxLength={4}
+              onChange={(e) => setNewIcon(e.target.value)}
+              aria-label="Category icon"
+            />
+            <input
+              className="note-input"
+              placeholder="Label"
+              value={newLabel}
+              maxLength={20}
+              onChange={(e) => setNewLabel(e.target.value)}
+              aria-label="Category label"
+            />
+          </div>
+          <div className="color-swatches">
+            {PRESET_CATEGORY_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`swatch ${newColor === c ? "selected" : ""}`}
+                style={{ background: c }}
+                onClick={() => setNewColor(c)}
+                aria-label={`Color ${c}`}
+              />
+            ))}
+          </div>
+          <div className="modal-buttons">
+            <button className="btn btn-secondary" onClick={() => setStep("details")}>Cancel</button>
+            <button className="btn btn-primary" disabled={!newLabel.trim()} onClick={handleSaveCategory}>
+              Add category
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // step === "details"
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet entry-sheet" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="amount-recap" onClick={() => setStep("amount")}>
+          {formatMoney(amountCents, currencySymbol)} <span className="edit-hint">edit</span>
+        </button>
+
+        <div className="category-grid">
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className={`category-chip ${category === c.id ? "selected" : ""}`}
+              style={{ "--chip-color": c.color }}
+              onClick={() => setCategory(c.id)}
+            >
+              <span className="chip-icon">{c.icon}</span>
+              <span className="chip-label">{c.label}</span>
+            </button>
+          ))}
+          {isPro ? (
+            <button type="button" className="category-chip add-chip" onClick={() => setStep("addCategory")}>
+              <span className="chip-icon">➕</span>
+              <span className="chip-label">Add</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="category-chip add-chip locked"
+              onClick={() => { onClose(); onOpenShop(); }}
+            >
+              <span className="chip-icon">🔒</span>
+              <span className="chip-label">Custom</span>
+            </button>
+          )}
+        </div>
+
+        <input
+          className="note-input"
+          placeholder="Add a note (optional)"
+          value={note}
+          maxLength={60}
+          onChange={(e) => setNote(e.target.value)}
+        />
+
+        <div className="modal-buttons">
+          {mode === "edit" ? (
+            <button className="btn-danger" onClick={() => onDelete(initialEntry.id)}>Delete</button>
+          ) : (
+            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          )}
+          <button className="btn btn-primary" disabled={!category} onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7b. BREAKDOWN SECTION — CSS-only horizontal bar list, no charting lib
+// ---------------------------------------------------------------------
+
+function BreakdownSection({ entries, categories, currencySymbol }) {
+  const { rows, total, count } = getMonthBreakdown(entries, categories);
+  return (
+    <div className="breakdown-section">
+      <div className="section-heading">
+        <h3>This month by category</h3>
+        <span className="section-sub">{formatMoney(total, currencySymbol)}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty-hint">No spending logged this month yet.</p>
+      ) : (
+        <div className="breakdown-list">
+          {rows.map((r) => (
+            <div className="breakdown-row" key={r.id}>
+              <span className="breakdown-icon">{r.icon}</span>
+              <span className="breakdown-label">{r.label}</span>
+              <div className="breakdown-track">
+                <div className="breakdown-fill" style={{ width: `${r.pct}%`, background: r.color }} />
+              </div>
+              <span className="breakdown-pct">{r.pct}%</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7c. SHOP MODAL — Pro stub
+//
+// "Unlocking" Pro right now only sets cosmetics.pro locally — there's no
+// real payment processor wired in yet, exactly like the sibling apps'
+// ThemeModal is upfront about. CSV export itself is fully real once
+// unlocked, though.
+// ---------------------------------------------------------------------
+
+function ShopModal({ isPro, categories, onPurchase, onDeleteCategory, onExportCSV, onClose }) {
+  const customCats = categories.filter((c) => c.custom);
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Spendlog Pro</h2>
+        <ul className="feature-list">
+          <li>Unlimited custom categories — your own icon, label &amp; color</li>
+          <li>Export every entry to a real CSV file, any time</li>
+        </ul>
+
+        {!isPro ? (
+          <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={onPurchase}>
+            Unlock Pro · {PRO_PRICE}
+          </button>
+        ) : (
+          <div className="pro-badge">✨ Pro unlocked</div>
+        )}
+
+        <button
+          className="btn btn-secondary"
+          style={{ width: "100%", marginBottom: 12, opacity: isPro ? 1 : 0.5 }}
+          disabled={!isPro}
+          onClick={onExportCSV}
+        >
+          Export CSV
+        </button>
+
+        {isPro && customCats.length > 0 && (
+          <>
+            <h3 className="stats-subheading">Your categories</h3>
+            <div className="custom-cat-list">
+              {customCats.map((c) => (
+                <div className="custom-cat-row" key={c.id}>
+                  <span>{c.icon} {c.label}</span>
+                  <button className="remove-cat-btn" onClick={() => onDeleteCategory(c.id)} aria-label={`Remove ${c.label}`}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlock is a placeholder and isn't wired to real billing yet.
+        </p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7d. SETTINGS MODAL — currency symbol
+// ---------------------------------------------------------------------
+
+const CURRENCY_OPTIONS = ["$", "€", "£", "¥", "₹"];
+
+function SettingsModal({ currencySymbol, onSetCurrency, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Settings</h2>
+        <p className="reflection-subtitle" style={{ margin: "0 0 14px" }}>Currency symbol</p>
+        <div className="currency-row">
+          {CURRENCY_OPTIONS.map((sym) => (
+            <button
+              key={sym}
+              type="button"
+              className={`currency-chip ${currencySymbol === sym ? "selected" : ""}`}
+              onClick={() => onSetCurrency(sym)}
+            >
+              {sym}
+            </button>
+          ))}
+        </div>
+        <div className="modal-buttons" style={{ marginTop: 18 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7e. BACKUP MODAL
+//
+// Free, always-available export/import of every "spendlog.*" localStorage
+// key as one JSON file — mirrors the sibling apps' BackupModal exactly.
+// Your own data recovery should never be a paid feature.
+// ---------------------------------------------------------------------
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("spendlog.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = {
+      app: "spendlog",
+      exportedAt: new Date().toISOString(),
+      data: collectBackupData(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `spendlog-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // reset so choosing the same file again still fires onChange
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "spendlog" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Spendlog backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("spendlog.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      // Full reload so every piece of state (entries, categories, currency,
+      // theme, pro flag) re-hydrates fresh from the restored localStorage
+      // instead of trying to patch a dozen pieces of live React state.
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="reflection-subtitle" style={{ margin: "0 0 20px" }}>
+          Save your expense log to a file on this device, or bring it back after a lost or reinstalled phone.
+        </p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && (
+          <p className="reflection-subtitle" style={{ color: "var(--danger)", marginTop: 10, marginBottom: 0 }}>
+            {error}
+          </p>
+        )}
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [entries, setEntries] = useState(loadEntries);
+  const [customCategories, setCustomCategories] = useState(loadCustomCategories);
+  const [currencySymbol, setCurrencySymbol] = useState(loadCurrency);
+  const [theme, setTheme] = useState(loadTheme);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [entryModal, setEntryModal] = useState(null); // { mode: "add" } | { mode: "edit", entry }
+  const [shopOpen, setShopOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+
+  useEffect(() => { saveEntries(entries); }, [entries]);
+  useEffect(() => { saveCustomCategories(customCategories); }, [customCategories]);
+  useEffect(() => { localStorage.setItem(CURRENCY_KEY, currencySymbol); }, [currencySymbol]);
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  useEffect(() => { saveCosmetics(cosmetics); }, [cosmetics]);
+
+  // Every category that might ever need to be displayed (for entries
+  // logged under a custom category, even in the unlikely case Pro status
+  // couldn't be reconfirmed) vs. only what should appear in the picker
+  // grid right now (free tier never shows custom categories, even if some
+  // exist in storage from a prior Pro session on this device).
+  const allCategoriesForLookup = [...DEFAULT_CATEGORIES, ...customCategories];
+  const pickerCategories = cosmetics.pro ? allCategoriesForLookup : DEFAULT_CATEGORIES;
+
+  function categoryById(id) {
+    return allCategoriesForLookup.find((c) => c.id === id) || { id, icon: "❓", label: "Deleted category", color: "#9aa5b1" };
+  }
+
+  function handleSaveEntry(entry) {
+    setEntries((prev) => {
+      const exists = prev.some((e) => e.id === entry.id);
+      if (exists) return prev.map((e) => (e.id === entry.id ? entry : e));
+      return [entry, ...prev];
+    });
+    setEntryModal(null);
+  }
+
+  function handleDeleteEntry(id) {
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+    setEntryModal(null);
+  }
+
+  function handleAddCategory(cat) {
+    setCustomCategories((prev) => [...prev, cat]);
+  }
+
+  function handleDeleteCategory(id) {
+    setCustomCategories((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  function handlePurchasePro() {
+    setCosmetics((prev) => ({ ...prev, pro: true }));
+  }
+
+  function handleExportCSV() {
+    exportEntriesCSV(entries, allCategoriesForLookup, currencySymbol);
+  }
+
+  const todayTotal = sumEntries(entries, (e) => isTodayTs(e.timestamp));
+  const weekTotal = sumEntries(entries, (e) => isThisWeekTs(e.timestamp));
+  const monthTotal = sumEntries(entries, (e) => isThisMonthTs(e.timestamp));
+  const monthCount = entries.filter((e) => isThisMonthTs(e.timestamp)).length;
+
+  const recentEntries = entries.slice().sort((a, b) => b.timestamp - a.timestamp).slice(0, 40);
+
+  const editingEntry = entryModal && entryModal.mode === "edit"
+    ? entries.find((e) => e.id === entryModal.entry.id) || entryModal.entry
+    : null;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title"><span className="coin-logo">🪙</span> Spendlog</h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setSettingsOpen(true)} aria-label="Settings">⚙️</button>
+          <button className="theme-toggle" onClick={() => setShopOpen(true)} aria-label="Spendlog Pro">💎</button>
+          <button className="theme-toggle" onClick={() => setBackupOpen(true)} aria-label="Backup & Restore">💾</button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+        </div>
+      </header>
+
+      <div className="totals-row">
+        <div className="stat-tile">
+          <span className="stat-num">{formatMoney(todayTotal, currencySymbol)}</span>
+          <span className="stat-label">Today</span>
+        </div>
+        <div className="stat-tile">
+          <span className="stat-num">{formatMoney(weekTotal, currencySymbol)}</span>
+          <span className="stat-label">This week</span>
+        </div>
+        <div className="stat-tile">
+          <span className="stat-num">{formatMoney(monthTotal, currencySymbol)}</span>
+          <span className="stat-label">This month</span>
+        </div>
+      </div>
+      <p className="entries-count-hint">{monthCount} {monthCount === 1 ? "entry" : "entries"} logged this month</p>
+
+      <div className="scroll-area">
+        <BreakdownSection entries={entries} categories={allCategoriesForLookup} currencySymbol={currencySymbol} />
+
+        <div className="recent-section">
+          <h3 className="section-heading-simple">Recent</h3>
+          {recentEntries.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <div className="entry-list">
+              {recentEntries.map((e) => (
+                <EntryRow
+                  key={e.id}
+                  entry={e}
+                  category={categoryById(e.category)}
+                  currencySymbol={currencySymbol}
+                  onTap={(id) => setEntryModal({ mode: "edit", entry: entries.find((x) => x.id === id) })}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <button className="fab" onClick={() => setEntryModal({ mode: "add" })} aria-label="Add expense">+</button>
+
+      {entryModal && (
+        <EntryModal
+          mode={entryModal.mode}
+          initialEntry={editingEntry}
+          categories={pickerCategories}
+          isPro={cosmetics.pro}
+          currencySymbol={currencySymbol}
+          onSave={handleSaveEntry}
+          onDelete={handleDeleteEntry}
+          onClose={() => setEntryModal(null)}
+          onAddCategory={handleAddCategory}
+          onOpenShop={() => setShopOpen(true)}
+        />
+      )}
+
+      {shopOpen && (
+        <ShopModal
+          isPro={cosmetics.pro}
+          categories={allCategoriesForLookup}
+          onPurchase={handlePurchasePro}
+          onDeleteCategory={handleDeleteCategory}
+          onExportCSV={handleExportCSV}
+          onClose={() => setShopOpen(false)}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal currencySymbol={currencySymbol} onSetCurrency={setCurrencySymbol} onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app. Silently no-ops over file:// or plain http, since
+  // both require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

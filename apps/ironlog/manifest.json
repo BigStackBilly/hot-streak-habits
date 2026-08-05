@@ -1,0 +1,15 @@
+{
+  "name": "Ironlog",
+  "short_name": "Ironlog",
+  "description": "A strength-training workout log — sets, reps, and weight per exercise, with honest personal-record tracking.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#121316",
+  "theme_color": "#15171b",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

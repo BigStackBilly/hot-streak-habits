@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Stillwater</title>
+<meta name="theme-color" content="#07131a" />
+
+<!-- Fonts: same pair convention as sibling apps (a rounded display face for
+     headings/numbers, Inter for body text) — reused as-is per the
+     "no new CDN deps" rule. Quicksand instead of Baloo 2 here on purpose:
+     softer, less "bouncy," better matches a calm-down app than a chunky
+     habit-tracker face. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Stillwater" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed — must stay an inline script (not a separate
+     app.js) so the page still works opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// STILLWATER — a guided breathing / calm-down timer
+//
+// No login, no backend, no ads. Pick a well-known breathing pattern,
+// follow a slowly expanding/contracting circle synced to its timing,
+// optionally with a generated ambient pad and soft phase chimes
+// (Web Audio API, no audio files). Everything lives in localStorage
+// under a "stillwater." prefix.
+//
+// Organized top to bottom as:
+//   1. Breathing patterns  - the presets (free + pro) and their timing
+//   2. Ambient sound packs - Web Audio "tone color" presets (free + pro)
+//   3. Date helpers + localStorage helpers
+//   4. Audio engine          - plain-JS Web Audio wrapper (no React)
+//   5. Small components       - PatternCard, DurationChip
+//   6. BreathingCircle + SessionScreen - the guided session itself
+//   7. SummaryScreen            - quiet post-session acknowledgment
+//   8. ShopModal                  - pro pattern/sound unlocks (stub billing)
+//   9. BackupModal                  - free local export/import
+//   10. App                           - top-level state + screen routing
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// 1. BREATHING PATTERNS
+//
+// Each phase is { name, label, seconds }. `name` drives the circle's
+// target scale (see PHASE_SCALE below) and which chime tone plays.
+// Patterns with no hold simply omit that phase — nothing special-cases
+// "zero seconds," a phase that doesn't exist is just never scheduled.
+// ---------------------------------------------------------------------
+
+const BREATHING_PATTERNS = [
+  {
+    id: "box",
+    name: "Box breathing",
+    pattern: "4-4-4-4",
+    description: "Steadies focus under pressure — a well-known Navy SEALs technique.",
+    pro: false,
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 4 },
+      { name: "hold1", label: "Hold…", seconds: 4 },
+      { name: "exhale", label: "Breathe out…", seconds: 4 },
+      { name: "hold2", label: "Hold…", seconds: 4 },
+    ],
+  },
+  {
+    id: "478",
+    name: "4-7-8",
+    pattern: "4-7-8",
+    description: "A well-known wind-down pattern for easing into sleep.",
+    pro: false,
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 4 },
+      { name: "hold1", label: "Hold…", seconds: 7 },
+      { name: "exhale", label: "Breathe out…", seconds: 8 },
+    ],
+  },
+  {
+    id: "simple",
+    name: "Simple calm",
+    pattern: "4-6",
+    description: "An easy in-and-out rhythm for everyday stress.",
+    pro: false,
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 4 },
+      { name: "exhale", label: "Breathe out…", seconds: 6 },
+    ],
+  },
+  {
+    id: "coherent",
+    name: "Coherent breathing",
+    pattern: "5-5",
+    description: "Even, balanced breaths said to help steady your heart rate.",
+    pro: false,
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 5 },
+      { name: "exhale", label: "Breathe out…", seconds: 5 },
+    ],
+  },
+  {
+    id: "quickreset",
+    name: "Quick reset",
+    pattern: "4-2-4-2",
+    description: "A brisk reset when you only have a minute to spare.",
+    pro: true,
+    price: "$1.99",
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 4 },
+      { name: "hold1", label: "Hold…", seconds: 2 },
+      { name: "exhale", label: "Breathe out…", seconds: 4 },
+      { name: "hold2", label: "Hold…", seconds: 2 },
+    ],
+  },
+  {
+    id: "extended",
+    name: "Extended calm",
+    pattern: "6-2-8",
+    description: "A long, slow exhale for a deeper wind-down.",
+    pro: true,
+    price: "$1.99",
+    phases: [
+      { name: "inhale", label: "Breathe in…", seconds: 6 },
+      { name: "hold1", label: "Hold…", seconds: 2 },
+      { name: "exhale", label: "Breathe out…", seconds: 8 },
+    ],
+  },
+];
+
+// Target circle scale per phase name — inhale grows to full size, exhale
+// shrinks back down, holds simply keep whatever size they arrived at.
+const PHASE_SCALE = { inhale: 1, hold1: 1, exhale: 0.62, hold2: 0.62 };
+
+// Soft chime pitch per phase name (a rising/falling little melody rather
+// than one flat beep, so inhale/exhale feel distinct by ear alone).
+const PHASE_CHIME_FREQ = { inhale: 523.25, hold1: 587.33, exhale: 392.0, hold2: 349.23 };
+
+const DURATION_OPTIONS = [1, 3, 5, 10, null]; // null = "Until I stop"
+
+function durationLabel(minutes) {
+  return minutes === null ? "Until I stop" : `${minutes} min`;
+}
+
+function getPatternById(id) {
+  return BREATHING_PATTERNS.find((p) => p.id === id) || BREATHING_PATTERNS[0];
+}
+
+// ---------------------------------------------------------------------
+// 2. AMBIENT SOUND PACKS
+//
+// Each is a "tone color" recipe for the audio engine below: a noise
+// color (brown/pink/white) run through a biquad filter, plus a slow
+// LFO wobbling the filter's cutoff for a bit of organic movement
+// (that's what gives "Ocean-like" its slow swell and "Soft rain" its
+// shimmer, without needing any audio files).
+// ---------------------------------------------------------------------
+
+const SOUND_PACKS = [
+  {
+    id: "calm",
+    name: "Calm drone",
+    description: "A soft, low filtered hum.",
+    pro: false,
+    spec: { noiseColor: "brown", filterType: "lowpass", filterFreq: 480, filterQ: 0.5, level: 0.16, lfoRate: 0.06, lfoDepth: 35 },
+  },
+  {
+    id: "ocean",
+    name: "Ocean-like",
+    description: "A slow, swelling wash, like distant waves.",
+    pro: true,
+    price: "$1.99",
+    spec: { noiseColor: "brown", filterType: "lowpass", filterFreq: 700, filterQ: 0.6, level: 0.2, lfoRate: 0.11, lfoDepth: 260 },
+  },
+  {
+    id: "deephum",
+    name: "Deep hum",
+    description: "A very low, steady pad — barely-there weight.",
+    pro: true,
+    price: "$1.99",
+    spec: { noiseColor: "brown", filterType: "lowpass", filterFreq: 200, filterQ: 0.4, level: 0.2, lfoRate: 0.04, lfoDepth: 12 },
+  },
+  {
+    id: "rain",
+    name: "Soft rain",
+    description: "A light, airy hiss, like rain on a window.",
+    pro: true,
+    price: "$1.99",
+    spec: { noiseColor: "pink", filterType: "highpass", filterFreq: 1100, filterQ: 0.3, level: 0.13, lfoRate: 0.3, lfoDepth: 90 },
+  },
+];
+
+function getSoundById(id) {
+  return SOUND_PACKS.find((s) => s.id === id) || SOUND_PACKS[0];
+}
+
+// ---------------------------------------------------------------------
+// 3. DATE HELPERS + LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+// Builds "YYYY-MM-DD" from local time fields (not toISOString(), which
+// converts to UTC first and can silently roll a late-evening session
+// into "tomorrow" for anyone west of Greenwich) — same reasoning as the
+// sibling apps.
+function todayKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function daysBetween(aKey, bKey) {
+  const a = new Date(aKey + "T00:00:00");
+  const b = new Date(bKey + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
+
+const STORAGE = {
+  history: "stillwater.sessionHistory.v1",
+  audioEnabled: "stillwater.audioEnabled.v1",
+  theme: "stillwater.theme.v1",
+  cosmetics: "stillwater.cosmetics.v1",
+};
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed === null || parsed === undefined ? fallback : parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // localStorage can be unavailable (private mode / quota) — sessions
+    // still work in-memory for the current page load either way.
+  }
+}
+
+function loadHistory() {
+  return loadJSON(STORAGE.history, []);
+}
+
+function saveHistory(history) {
+  saveJSON(STORAGE.history, history);
+}
+
+// Default true: ambient audio is genuinely calming, so it's on unless
+// the person turns it off, but the choice is remembered afterward.
+function loadAudioEnabled() {
+  return loadJSON(STORAGE.audioEnabled, true);
+}
+
+function saveAudioEnabled(enabled) {
+  saveJSON(STORAGE.audioEnabled, enabled);
+}
+
+// Dark is the natural default here — most people reach for a calm-down
+// timer in a dim room or at night — but light is fully supported.
+function loadTheme() {
+  return loadJSON(STORAGE.theme, "dark");
+}
+
+function saveTheme(theme) {
+  saveJSON(STORAGE.theme, theme);
+}
+
+function loadCosmetics() {
+  return loadJSON(STORAGE.cosmetics, { purchased: [], activeSound: "calm" });
+}
+
+function saveCosmetics(cosmetics) {
+  saveJSON(STORAGE.cosmetics, cosmetics);
+}
+
+function sessionsThisWeek(history) {
+  const today = todayKey();
+  return history.filter((s) => daysBetween(s.date, today) < 7 && daysBetween(s.date, today) >= 0).length;
+}
+
+// ---------------------------------------------------------------------
+// 4. AUDIO ENGINE
+//
+// Plain JS, deliberately outside React — Web Audio nodes are stateful
+// objects that don't belong in React state. A single AudioContext is
+// created lazily on first use (must happen inside a real user gesture,
+// i.e. the "Begin session" tap, or the browser leaves it suspended and
+// silent), and every gain change is a ramp (never an instant jump) so
+// nothing here has a harsh on/off click.
+// ---------------------------------------------------------------------
+
+function createAudioEngine() {
+  let ctx = null;
+  let masterGain = null;
+  let ambient = null; // { source, filter, gain, lfo, lfoGain }
+
+  function ensureContext() {
+    if (!ctx) {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return null;
+      ctx = new Ctor();
+      masterGain = ctx.createGain();
+      masterGain.gain.value = 1;
+      masterGain.connect(ctx.destination);
+    }
+    // Browsers create AudioContext in "suspended" state until a user
+    // gesture resumes it — the "Begin session" click counts, but only
+    // if we actually call resume() from inside that same click handler.
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    return ctx;
+  }
+
+  // A short (4s) noise buffer, looped, colored toward brown/pink by a
+  // simple leaky-integrator filter over white noise — a well-known,
+  // cheap way to get a soft rather than harsh noise texture without
+  // any external sample.
+  function makeNoiseBuffer(context, color) {
+    const seconds = 4;
+    const length = Math.floor(context.sampleRate * seconds);
+    const buffer = context.createBuffer(1, length, context.sampleRate);
+    const data = buffer.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < length; i++) {
+      const white = Math.random() * 2 - 1;
+      if (color === "brown") {
+        last = (last + 0.02 * white) / 1.02;
+        data[i] = last * 3.2;
+      } else if (color === "pink") {
+        last = 0.97 * last + 0.03 * white;
+        data[i] = last * 2.2;
+      } else {
+        data[i] = white * 0.6;
+      }
+    }
+    return buffer;
+  }
+
+  function stopAmbient(fadeSeconds = 0.5) {
+    if (!ambient || !ctx) return;
+    const { source, gain, lfo } = ambient;
+    const now = ctx.currentTime;
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(gain.gain.value, now);
+    gain.gain.linearRampToValueAtTime(0, now + fadeSeconds);
+    const cleanupDelay = (fadeSeconds + 0.1) * 1000;
+    setTimeout(() => {
+      try { source.stop(); } catch {}
+      try { lfo.stop(); } catch {}
+    }, cleanupDelay);
+    ambient = null;
+  }
+
+  function startAmbient(soundId) {
+    const context = ensureContext();
+    if (!context) return;
+    stopAmbient(0.15);
+
+    const spec = getSoundById(soundId).spec;
+    const buffer = makeNoiseBuffer(context, spec.noiseColor);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+
+    const filter = context.createBiquadFilter();
+    filter.type = spec.filterType;
+    filter.frequency.value = spec.filterFreq;
+    filter.Q.value = spec.filterQ;
+
+    const gain = context.createGain();
+    gain.gain.value = 0;
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+
+    // Slow LFO wobbling the filter cutoff — the "movement" that makes
+    // this read as ocean/rain/breathing rather than a flat tone.
+    const lfo = context.createOscillator();
+    lfo.frequency.value = spec.lfoRate;
+    const lfoGain = context.createGain();
+    lfoGain.gain.value = spec.lfoDepth;
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    source.start();
+    lfo.start();
+
+    const now = context.currentTime;
+    gain.gain.linearRampToValueAtTime(spec.level, now + 1.4); // soft attack, no click
+
+    ambient = { source, filter, gain, lfo, lfoGain };
+  }
+
+  // A single soft chime marking a phase transition — sine tone, gentle
+  // attack/release envelope via GainNode ramps (never a hard edge).
+  function playChime(phaseName) {
+    const context = ensureContext();
+    if (!context) return;
+    const freq = PHASE_CHIME_FREQ[phaseName] || 440;
+    const osc = context.createOscillator();
+    osc.type = "sine";
+    const gain = context.createGain();
+    gain.gain.value = 0;
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.frequency.value = freq;
+    const now = context.currentTime;
+    osc.start(now);
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.3);
+    gain.gain.linearRampToValueAtTime(0, now + 1.6);
+    osc.stop(now + 1.7);
+  }
+
+  function setMuted(muted) {
+    if (!masterGain || !ctx) return;
+    const now = ctx.currentTime;
+    masterGain.gain.cancelScheduledValues(now);
+    masterGain.gain.setValueAtTime(masterGain.gain.value, now);
+    masterGain.gain.linearRampToValueAtTime(muted ? 0 : 1, now + 0.2);
+  }
+
+  function teardown() {
+    stopAmbient(0.2);
+  }
+
+  return { ensureContext, startAmbient, stopAmbient, playChime, setMuted, teardown };
+}
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function PatternCard({ pattern, selected, locked, onSelect }) {
+  return (
+    <button
+      className={`pattern-card ${selected ? "selected" : ""} ${locked ? "locked" : ""}`}
+      onClick={() => onSelect(pattern)}
+    >
+      <div className="pattern-card-top">
+        <span className="pattern-name">{pattern.name}</span>
+        <span className="pattern-numbers">{pattern.pattern}</span>
+      </div>
+      <p className="pattern-desc">{pattern.description}</p>
+      {locked && <span className="pattern-lock">✨ Pro · {pattern.price}</span>}
+    </button>
+  );
+}
+
+function DurationChip({ minutes, selected, onSelect }) {
+  return (
+    <button className={`duration-chip ${selected ? "selected" : ""}`} onClick={() => onSelect(minutes)}>
+      {durationLabel(minutes)}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. BREATHING CIRCLE + SESSION SCREEN
+// ---------------------------------------------------------------------
+
+function BreathingCircle({ phase, ringRef }) {
+  const scale = phase ? PHASE_SCALE[phase.name] : 0.62;
+  const seconds = phase ? phase.seconds : 1;
+  const isHold = phase && (phase.name === "hold1" || phase.name === "hold2");
+  return (
+    <div className="session-ring" ref={ringRef} style={{ "--pct": "0%" }}>
+      <div
+        className={`breathing-circle ${isHold ? "holding" : ""}`}
+        style={{ transform: `scale(${scale})`, transitionDuration: `${seconds}s` }}
+      >
+        <div className="breathing-circle-core" />
+      </div>
+    </div>
+  );
+}
+
+function SessionScreen({ pattern, durationMinutes, audioEnabled, soundId, engineRef, onFinish, onToggleAudio }) {
+  const phases = pattern.phases;
+  const [phaseIndex, setPhaseIndex] = React.useState(0);
+  const [cycles, setCycles] = React.useState(0);
+  const ringRef = React.useRef(null);
+  const startTimeRef = React.useRef(Date.now());
+  const timeoutRef = React.useRef(null);
+  const rafRef = React.useRef(null);
+  const phaseStartRef = React.useRef(Date.now());
+  const finishedRef = React.useRef(false);
+
+  const currentPhase = phases[phaseIndex];
+
+  // Keeps the ambient pad in sync with the audio toggle for the whole
+  // lifetime of the session — including turning it ON mid-session after
+  // starting with sound off. Just muting the master gain (as the toggle
+  // does everywhere else in the app) can't un-silence a pad that was
+  // never created in the first place, since the ambient source is only
+  // ever instantiated by startAmbient(). Runs on mount too, taking over
+  // the initial start that used to happen once in handleBegin.
+  React.useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (audioEnabled) {
+      engine.startAmbient(soundId);
+    } else {
+      engine.stopAmbient(0.4);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioEnabled, soundId]);
+
+  function finishSession(reason) {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const engine = engineRef.current;
+    if (engine) engine.stopAmbient(0.6);
+    const elapsedMinutes = (Date.now() - startTimeRef.current) / 60000;
+    onFinish({
+      patternId: pattern.id,
+      cycles,
+      elapsedMinutes,
+      reason, // "duration" | "manual"
+    });
+  }
+
+  // Drives the phase loop with a self-scheduling timeout chain. Each
+  // phase's own `seconds` value IS the timeout delay, so the circle's
+  // CSS transition (set to that same `seconds` in BreathingCircle) and
+  // the phase-label swap stay locked to the same clock.
+  React.useEffect(() => {
+    phaseStartRef.current = Date.now();
+    const engine = engineRef.current;
+    if (engine && audioEnabled) engine.playChime(currentPhase.name);
+
+    timeoutRef.current = setTimeout(() => {
+      const nextIndex = (phaseIndex + 1) % phases.length;
+      if (nextIndex === 0) {
+        const justCompletedCycles = cycles + 1;
+        setCycles(justCompletedCycles);
+        const elapsedMinutes = (Date.now() - startTimeRef.current) / 60000;
+        if (durationMinutes !== null && elapsedMinutes >= durationMinutes) {
+          finishSession("duration");
+          return;
+        }
+      }
+      setPhaseIndex(nextIndex);
+    }, currentPhase.seconds * 1000);
+
+    return () => clearTimeout(timeoutRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phaseIndex]);
+
+  // Smooth ring progress (0-100% of the current phase), updated via
+  // rAF and written straight to the DOM through a ref rather than
+  // React state, so this ~60fps tick never triggers a re-render.
+  React.useEffect(() => {
+    function tick() {
+      const el = ringRef.current;
+      if (el) {
+        const elapsed = Date.now() - phaseStartRef.current;
+        const pct = Math.max(0, Math.min(100, (elapsed / (currentPhase.seconds * 1000)) * 100));
+        el.style.setProperty("--pct", `${pct}%`);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [phaseIndex, currentPhase.seconds]);
+
+  return (
+    <div className="screen session-screen">
+      <div className="session-top">
+        <span className="session-pattern-name">{pattern.name}</span>
+        <button
+          className="icon-btn session-mute-btn"
+          onClick={onToggleAudio}
+          aria-label="Toggle sound"
+          title="Toggle sound"
+        >
+          {audioEnabled ? "🔈" : "🔇"}
+        </button>
+        <span className="session-cycles">{cycles} breath {cycles === 1 ? "cycle" : "cycles"}</span>
+      </div>
+
+      <div className="session-visual-wrap">
+        <BreathingCircle phase={currentPhase} ringRef={ringRef} />
+      </div>
+
+      <p className="session-phase-label">{currentPhase.label}</p>
+
+      <button className="btn btn-secondary session-stop" onClick={() => finishSession("manual")}>
+        Stop
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. SUMMARY SCREEN
+// ---------------------------------------------------------------------
+
+function SummaryScreen({ summary, weekCount, onDone }) {
+  const minutesLabel =
+    summary.elapsedMinutes < 1
+      ? `${Math.max(1, Math.round(summary.elapsedMinutes * 60))} seconds`
+      : `${Math.round(summary.elapsedMinutes)} minute${Math.round(summary.elapsedMinutes) === 1 ? "" : "s"}`;
+
+  return (
+    <div className="screen summary-screen">
+      <div className="summary-glow" />
+      <h1 className="summary-title">Session complete</h1>
+      <p className="summary-line">
+        {minutesLabel}, {summary.cycles} breath {summary.cycles === 1 ? "cycle" : "cycles"} complete.
+      </p>
+      <p className="summary-note">
+        {summary.cycles === 0
+          ? "Even a few breaths count — no pressure to finish more."
+          : "Nicely done. However that felt, it's already behind you now."}
+      </p>
+      <p className="summary-week">Sessions this week: {weekCount}</p>
+      <button className="btn btn-primary summary-done" onClick={onDone}>
+        Done
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. SHOP MODAL
+//
+// "Buying" here only records the id in cosmetics.purchased locally —
+// no real payment processor wired in yet, matching the sibling apps'
+// honest ThemeModal stub. Nothing about the free breathing patterns or
+// the core guided session is ever gated — only the extra presets/sounds
+// below are paid.
+// ---------------------------------------------------------------------
+
+function ShopModal({ cosmetics, onPurchase, onSelectSound, onClose }) {
+  const proPatterns = BREATHING_PATTERNS.filter((p) => p.pro);
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Stillwater extras</h2>
+
+        <h3 className="shop-subheading">Extra breathing patterns</h3>
+        <div className="shop-grid">
+          {proPatterns.map((p) => {
+            const owned = cosmetics.purchased.includes(`pattern:${p.id}`);
+            return (
+              <button
+                key={p.id}
+                className={`shop-option ${owned ? "owned" : ""}`}
+                onClick={() => !owned && onPurchase(`pattern:${p.id}`)}
+              >
+                <span className="shop-option-name">{p.name}</span>
+                <span className="shop-option-sub">{p.pattern}</span>
+                <span className="shop-option-status">{owned ? "Owned" : `Unlock · ${p.price}`}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <h3 className="shop-subheading">Ambient sounds</h3>
+        <div className="shop-grid">
+          {SOUND_PACKS.map((s) => {
+            const owned = !s.pro || cosmetics.purchased.includes(`sound:${s.id}`);
+            const active = cosmetics.activeSound === s.id;
+            return (
+              <button
+                key={s.id}
+                className={`shop-option ${active ? "selected" : ""} ${owned ? "owned" : ""}`}
+                onClick={() => (owned ? onSelectSound(s.id) : onPurchase(`sound:${s.id}`))}
+              >
+                <span className="shop-option-name">{s.name}</span>
+                <span className="shop-option-sub">{s.description}</span>
+                <span className="shop-option-status">
+                  {active ? "Active" : owned ? "Owned" : `Unlock · ${s.price}`}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="shop-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch. The core breathing
+          patterns and full guided session are always free, unlimited.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. BACKUP MODAL
+//
+// A genuinely free, always-available export/import of the raw
+// "stillwater.*" localStorage keys as one JSON file — mirrors the
+// sibling apps' BackupModal exactly, kept fully offline.
+// ---------------------------------------------------------------------
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("stillwater.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = React.useState("");
+  const [restoring, setRestoring] = React.useState(false);
+
+  function handleDownload() {
+    const payload = {
+      app: "stillwater",
+      exportedAt: new Date().toISOString(),
+      data: collectBackupData(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `stillwater-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "stillwater" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Stillwater backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("stillwater.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="shop-note" style={{ margin: "0 0 20px" }}>
+          Save your session history to a file on this device, or bring it back after a lost or reinstalled phone.
+        </p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && (
+          <p className="shop-note" style={{ color: "var(--danger)", marginTop: 10, marginBottom: 0 }}>
+            {error}
+          </p>
+        )}
+
+        <p className="shop-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 10. APP
+// ---------------------------------------------------------------------
+
+function HomeScreen({
+  patterns,
+  selectedPattern,
+  onSelectPattern,
+  duration,
+  onSelectDuration,
+  onBegin,
+  weekCount,
+}) {
+  return (
+    <div className="screen home-screen">
+      <header className="home-header">
+        <h1 className="app-title">Stillwater</h1>
+        <p className="app-subtitle">A quiet place to slow your breathing down.</p>
+      </header>
+
+      <div className="pattern-list">
+        {patterns.map((p) => (
+          <PatternCard
+            key={p.id}
+            pattern={p}
+            selected={selectedPattern.id === p.id}
+            locked={false}
+            onSelect={onSelectPattern}
+          />
+        ))}
+      </div>
+
+      <div className="duration-section">
+        <span className="duration-label">Session length</span>
+        <div className="duration-row">
+          {DURATION_OPTIONS.map((m) => (
+            <DurationChip key={String(m)} minutes={m} selected={duration === m} onSelect={onSelectDuration} />
+          ))}
+        </div>
+      </div>
+
+      {weekCount > 0 && <p className="home-week-note">{weekCount} session{weekCount === 1 ? "" : "s"} this week</p>}
+
+      <button className="btn btn-primary home-begin" onClick={onBegin}>
+        Begin session
+      </button>
+    </div>
+  );
+}
+
+function App() {
+  const [screen, setScreen] = React.useState("home"); // "home" | "session" | "summary"
+  const [selectedPatternId, setSelectedPatternId] = React.useState(BREATHING_PATTERNS[0].id);
+  const [duration, setDuration] = React.useState(3);
+  const [audioEnabled, setAudioEnabled] = React.useState(loadAudioEnabled);
+  const [theme, setTheme] = React.useState(loadTheme);
+  const [cosmetics, setCosmetics] = React.useState(loadCosmetics);
+  const [history, setHistory] = React.useState(loadHistory);
+  const [shopOpen, setShopOpen] = React.useState(false);
+  const [backupOpen, setBackupOpen] = React.useState(false);
+  const [lastSummary, setLastSummary] = React.useState(null);
+
+  const engineRef = React.useRef(null);
+  if (!engineRef.current) engineRef.current = createAudioEngine();
+
+  React.useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    saveTheme(theme);
+  }, [theme]);
+
+  React.useEffect(() => {
+    saveAudioEnabled(audioEnabled);
+    const engine = engineRef.current;
+    if (engine) engine.setMuted(!audioEnabled);
+  }, [audioEnabled]);
+
+  React.useEffect(() => {
+    saveCosmetics(cosmetics);
+  }, [cosmetics]);
+
+  React.useEffect(() => {
+    saveHistory(history);
+  }, [history]);
+
+  // Tear down any live audio nodes if the tab is closed mid-session.
+  React.useEffect(() => {
+    return () => {
+      if (engineRef.current) engineRef.current.teardown();
+    };
+  }, []);
+
+  const allSelectablePatterns = BREATHING_PATTERNS.filter(
+    (p) => !p.pro || cosmetics.purchased.includes(`pattern:${p.id}`)
+  );
+  const selectedPattern = getPatternById(selectedPatternId);
+
+  function handleBegin() {
+    // Starting the AudioContext must happen synchronously inside this
+    // click handler — the actual "user gesture" the browser requires —
+    // or it stays suspended and silent even if we call resume() later.
+    // (Actually starting the ambient pad, if enabled, is SessionScreen's
+    // job — its own audioEnabled-synced effect handles that, including
+    // the case where sound gets turned on mid-session.)
+    const engine = engineRef.current;
+    engine.ensureContext();
+    setScreen("session");
+  }
+
+  function handleSessionFinish(summary) {
+    const engine = engineRef.current;
+    if (engine) engine.stopAmbient(0.6);
+    const entry = {
+      date: todayKey(),
+      patternId: summary.patternId,
+      cycles: summary.cycles,
+      durationMinutes: Math.round(summary.elapsedMinutes * 10) / 10,
+    };
+    setHistory((h) => [entry, ...h].slice(0, 200));
+    setLastSummary(summary);
+    setScreen("summary");
+  }
+
+  function handlePurchase(id) {
+    setCosmetics((c) => (c.purchased.includes(id) ? c : { ...c, purchased: [...c.purchased, id] }));
+  }
+
+  function handleSelectSound(soundId) {
+    setCosmetics((c) => ({ ...c, activeSound: soundId }));
+  }
+
+  return (
+    <div className="app">
+      {screen !== "session" && (
+        <div className="topbar">
+          <button
+            className="icon-btn"
+            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            aria-label="Toggle theme"
+            title="Toggle theme"
+          >
+            {theme === "dark" ? "🌙" : "☀️"}
+          </button>
+          <button
+            className="icon-btn"
+            onClick={() => setAudioEnabled((a) => !a)}
+            aria-label="Toggle sound"
+            title="Toggle sound"
+          >
+            {audioEnabled ? "🔈" : "🔇"}
+          </button>
+          <div className="topbar-spacer" />
+          <button className="icon-btn" onClick={() => setBackupOpen(true)} aria-label="Backup and restore" title="Backup and restore">
+            🗂️
+          </button>
+          <button className="icon-btn" onClick={() => setShopOpen(true)} aria-label="Extras" title="Extras">
+            ✨
+          </button>
+        </div>
+      )}
+
+      {screen === "home" && (
+        <HomeScreen
+          patterns={allSelectablePatterns}
+          selectedPattern={selectedPattern}
+          onSelectPattern={(p) => setSelectedPatternId(p.id)}
+          duration={duration}
+          onSelectDuration={setDuration}
+          onBegin={handleBegin}
+          weekCount={sessionsThisWeek(history)}
+        />
+      )}
+
+      {screen === "session" && (
+        <SessionScreen
+          pattern={selectedPattern}
+          durationMinutes={duration}
+          audioEnabled={audioEnabled}
+          soundId={cosmetics.activeSound}
+          engineRef={engineRef}
+          onFinish={handleSessionFinish}
+          onToggleAudio={() => setAudioEnabled((a) => !a)}
+        />
+      )}
+
+      {screen === "summary" && lastSummary && (
+        <SummaryScreen summary={lastSummary} weekCount={sessionsThisWeek(history)} onDone={() => setScreen("home")} />
+      )}
+
+      {shopOpen && (
+        <ShopModal
+          cosmetics={cosmetics}
+          onPurchase={handlePurchase}
+          onSelectSound={handleSelectSound}
+          onClose={() => setShopOpen(false)}
+        />
+      )}
+
+      {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} />}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android/iOS. Silently no-ops over file:// or plain
+  // http, since browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

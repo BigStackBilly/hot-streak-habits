@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Workflo</title>
+<meta name="theme-color" content="#0c0d13" />
+
+<!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
+     Inter for body text) — reused as-is per the "no new CDN deps" rule. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Workflo" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Same reasoning as the sibling apps: this has to
+     stay an inline script (not a separate app.js) so the page still works
+     opened as a bare file:// URL. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// WORKFLO — a Pomodoro-style deep-work timer with honest progress totals
+//
+// Configurable work/break intervals (classic 25/5 Pomodoro by default),
+// a big countdown ring, and a session log that answers "how much did I
+// actually focus today" — not a punishing daily streak. No login, no
+// backend, everything lives in localStorage under a "workflo." prefix.
+//
+// Organized top to bottom as:
+//   1. Time/date helpers     - "YYYY-MM-DD" keys, mm:ss and "Xh Ym" formatting
+//   2. localStorage helpers  - settings, session log, theme, cosmetics
+//   3. Audio/haptics         - the phase-transition chime + vibration
+//   4. Small components      - StatTile, WeekChart, SessionGroup
+//   5. SettingsModal          - work/break/long-break/cycle durations
+//   6. ShopModal               - cosmetic ring packs + Workflo Pro unlock
+//   7. HistoryModal              - session log + (Pro) weekly chart
+//   8. BackupModal                 - free local export/import
+//   9. App                          - timer state machine + layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const SETTINGS_KEY = "workflo.settings.v1";
+const LOG_KEY = "workflo.sessionLog.v1";
+const THEME_KEY = "workflo.theme.v1";
+const COSMETICS_KEY = "workflo.cosmetics.v1";
+const LAST_LABEL_KEY = "workflo.lastLabel.v1";
+
+const FREE_HISTORY_DAYS = 7;
+
+const DEFAULT_SETTINGS = {
+  workMinutes: 25,
+  breakMinutes: 5,
+  longBreakMinutes: 15,
+  cyclesUntilLongBreak: 4,
+};
+
+const FOCUS_PACKS = [
+  { id: "classic", name: "Classic", free: true },
+  { id: "midnight", name: "Midnight", price: "$1.99" },
+  { id: "citrus", name: "Citrus", price: "$1.99" },
+  { id: "crimson", name: "Crimson", price: "$1.99" },
+];
+
+const PACK_SWATCH = {
+  classic: ["#ff6b4a", "#22d3ee"],
+  midnight: ["#8b5cf6", "#38bdf8"],
+  citrus: ["#f97316", "#22c55e"],
+  crimson: ["#ef4444", "#0ea5e9"],
+};
+
+// ---------------------------------------------------------------------
+// 1. TIME/DATE HELPERS
+// ---------------------------------------------------------------------
+
+// Builds "YYYY-MM-DD" from local time fields (not toISOString, which
+// converts to UTC first and can silently roll the date over near
+// midnight in timezones west of Greenwich).
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+function formatClock(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+// "0m" / "45m" / "2h 15m" — never shows seconds, this is a summary unit.
+function formatMinutes(totalMinutes) {
+  const mins = Math.round(totalMinutes);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Monday-anchored start-of-week key, used to group entries for the
+// weekly chart.
+function weekStartKey(dateKey) {
+  const d = new Date(dateKey + "T00:00:00");
+  const day = d.getDay(); // 0 = Sunday
+  const diff = day === 0 ? -6 : 1 - day; // shift back to Monday
+  d.setDate(d.getDate() + diff);
+  return toDateKey(d);
+}
+
+// ---------------------------------------------------------------------
+// 2. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadSettings() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    if (raw) return { ...DEFAULT_SETTINGS, ...raw };
+  } catch {}
+  return { ...DEFAULT_SETTINGS };
+}
+
+function saveSettings(settings) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function loadLog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LOG_KEY));
+    if (Array.isArray(raw)) return raw;
+  } catch {}
+  return [];
+}
+
+function saveLog(log) {
+  localStorage.setItem(LOG_KEY, JSON.stringify(log));
+}
+
+function loadTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  if (stored) return stored;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { purchased: ["classic"], activePack: "classic", proHistory: false, shopViewed: false };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+function loadLastLabel() {
+  return localStorage.getItem(LAST_LABEL_KEY) || "";
+}
+
+// ---------------------------------------------------------------------
+// 3. AUDIO / HAPTICS
+//
+// A short rising two-tone chime via the Web Audio API directly — no
+// audio file to ship, works offline. Pitch/direction differs slightly
+// by phase so a work->break transition doesn't sound identical to a
+// break->work one, without needing to look at the screen.
+// ---------------------------------------------------------------------
+
+function playTransitionChime(startingWork) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const freqs = startingWork ? [520, 780] : [780, 520];
+    freqs.forEach((freq, i) => {
+      const startAt = i * 0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.28, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.22);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.22);
+    });
+  } catch {
+    // Web Audio unavailable/blocked until a user gesture — the visual
+    // banner and vibration still carry the transition moment.
+  }
+}
+
+function vibrateTransition() {
+  if (navigator.vibrate) navigator.vibrate([160, 80, 160]);
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function StatTile({ num, label }) {
+  return (
+    <div className="stat-tile">
+      <span className="stat-num">{num}</span>
+      <span className="stat-label">{label}</span>
+    </div>
+  );
+}
+
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// A simple 7-bar weekly chart: total focused minutes per day of the
+// current week (Mon-Sun), Workflo Pro only.
+function WeekChart({ log }) {
+  const monday = weekStartKey(todayKey());
+  const mondayDate = new Date(monday + "T00:00:00");
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(mondayDate);
+    d.setDate(d.getDate() + i);
+    return toDateKey(d);
+  });
+  const totals = days.map((key) => log.filter((e) => e.date === key).reduce((sum, e) => sum + e.minutes, 0));
+  const max = Math.max(1, ...totals);
+
+  return (
+    <div className="week-chart">
+      {days.map((key, i) => (
+        <div className="week-chart-col" key={key}>
+          <div className="week-chart-bar-track">
+            <div className="week-chart-bar-fill" style={{ height: `${Math.round((totals[i] / max) * 100)}%` }} />
+          </div>
+          <span className="week-chart-day">{DAY_LABELS[i]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SessionGroup({ group }) {
+  const label = new Date(group.date + "T00:00:00").toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return (
+    <div className="session-group">
+      <div className="session-group-head">
+        <span className="session-date">{label}</span>
+        <span className="session-duration">{formatMinutes(group.minutes)}</span>
+      </div>
+      <div className="session-meta">
+        {group.cycles} cycle{group.cycles === 1 ? "" : "s"}
+      </div>
+      {group.label && <div className="session-label">"{group.label}"</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. SETTINGS MODAL
+//
+// Sensible 25/5 defaults are the fast path — this is only ever opened
+// on request from the gear icon, never forced before first use.
+// ---------------------------------------------------------------------
+
+function SettingsModal({ settings, onSave, onClose }) {
+  const [draft, setDraft] = useState(settings);
+
+  function update(key, value) {
+    setDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  function handleSave() {
+    onSave(draft);
+    onClose();
+  }
+
+  function handleResetDefaults() {
+    setDraft({ ...DEFAULT_SETTINGS });
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Timer settings</h2>
+
+        <div className="setting-row">
+          <div className="setting-row-head">
+            <span className="setting-label">Focus length</span>
+            <span className="setting-value">{draft.workMinutes} min</span>
+          </div>
+          <input
+            type="range"
+            min="5"
+            max="60"
+            step="5"
+            value={draft.workMinutes}
+            onChange={(e) => update("workMinutes", Number(e.target.value))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row-head">
+            <span className="setting-label">Short break</span>
+            <span className="setting-value">{draft.breakMinutes} min</span>
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="30"
+            step="1"
+            value={draft.breakMinutes}
+            onChange={(e) => update("breakMinutes", Number(e.target.value))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row-head">
+            <span className="setting-label">Long break</span>
+            <span className="setting-value">{draft.longBreakMinutes} min</span>
+          </div>
+          <input
+            type="range"
+            min="5"
+            max="45"
+            step="5"
+            value={draft.longBreakMinutes}
+            onChange={(e) => update("longBreakMinutes", Number(e.target.value))}
+          />
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row-head">
+            <span className="setting-label">Long break every</span>
+            <span className="setting-value">{draft.cyclesUntilLongBreak} cycles</span>
+          </div>
+          <input
+            type="range"
+            min="2"
+            max="8"
+            step="1"
+            value={draft.cyclesUntilLongBreak}
+            onChange={(e) => update("cyclesUntilLongBreak", Number(e.target.value))}
+          />
+        </div>
+
+        <button className="reset-defaults-btn" onClick={handleResetDefaults}>
+          Reset to classic 25 / 5
+        </button>
+
+        <p className="settings-note">Changes apply the next time a phase starts fresh — a running timer keeps its current countdown.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. SHOP MODAL — cosmetic ring packs + Workflo Pro history unlock
+//
+// "Buying" a pack or the history unlock right now only flips local
+// flags — there's no real payment processor wired in yet, which the
+// modal's footer note is upfront about, same honest stub as the
+// sibling apps' ThemeModal. The actual timer is never gated behind
+// any of this.
+// ---------------------------------------------------------------------
+
+function ShopModal({ cosmetics, onPurchasePack, onSelectPack, onPurchaseHistory, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Workflo Pro</h2>
+
+        <h3>Ring &amp; accent themes</h3>
+        <div className="theme-grid">
+          {FOCUS_PACKS.map((pack) => {
+            const owned = pack.free || cosmetics.purchased.includes(pack.id);
+            const active = cosmetics.activePack === pack.id;
+            const swatch = PACK_SWATCH[pack.id];
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelectPack(pack.id) : onPurchasePack(pack.id))}
+              >
+                <span className="theme-swatch" style={{ background: `linear-gradient(135deg, ${swatch[0]}, ${swatch[1]})` }} />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">{active ? "Active" : owned ? "Owned" : `Unlock · ${pack.price}`}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <h3>Extended history</h3>
+        <button
+          className={`pro-feature-card ${cosmetics.proHistory ? "selected" : ""}`}
+          onClick={() => !cosmetics.proHistory && onPurchaseHistory()}
+        >
+          <span className="pro-feature-emoji">📊</span>
+          <span className="pro-feature-body">
+            <p className="pro-feature-title">Full history &amp; weekly chart</p>
+            <p className="pro-feature-desc">Free shows your last {FREE_HISTORY_DAYS} days. Unlock your entire session history plus a weekly focus chart.</p>
+          </span>
+          <span className="pro-feature-status">{cosmetics.proHistory ? "Owned" : "Unlock · $2.99"}</span>
+        </button>
+
+        <p className="theme-note">
+          Testing preview — unlocks are free for now and will connect to real purchases at launch. The core timer stays free and unrestricted either way.
+        </p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. HISTORY MODAL — session log + (Pro) weekly chart
+//
+// Individual completed work cycles are logged the instant they finish
+// (see handlePhaseComplete in App), then grouped here by sessionId for
+// display — so a crash or closed tab mid-session never loses cycles
+// that already finished. Today's total and cycle count are always
+// free; the weekly chart and full scroll-back history are Pro.
+// ---------------------------------------------------------------------
+
+function HistoryModal({ log, cosmetics, onOpenShop, onClose }) {
+  const today = todayKey();
+  const todayEntries = log.filter((e) => e.date === today);
+  const todayMinutes = todayEntries.reduce((sum, e) => sum + e.minutes, 0);
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - (FREE_HISTORY_DAYS - 1));
+  const cutoffKey = toDateKey(cutoff);
+  const hasOlderHistory = !cosmetics.proHistory && log.some((e) => e.date < cutoffKey);
+
+  const visible = cosmetics.proHistory ? log : log.filter((e) => e.date >= cutoffKey);
+
+  // Group by sessionId *and* calendar date, newest first. A session that's
+  // left running across midnight logs cycles under two different `date`
+  // values even though they share one sessionId — grouping by sessionId
+  // alone would fold a post-midnight cycle's minutes into the previous
+  // day's card (wrong total for the date shown) and would also hand two
+  // groups the same React `key` below. Keying by both keeps each calendar
+  // day's total correct and every group's key unique.
+  const groupsMap = new Map();
+  for (const entry of visible) {
+    const groupKey = `${entry.sessionId}::${entry.date}`;
+    const g = groupsMap.get(groupKey) || { key: groupKey, sessionId: entry.sessionId, date: entry.date, minutes: 0, cycles: 0, label: entry.label };
+    g.minutes += entry.minutes;
+    g.cycles += 1;
+    if (!g.label && entry.label) g.label = entry.label;
+    groupsMap.set(groupKey, g);
+  }
+  const groups = Array.from(groupsMap.values()).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  const totalCycles = log.length;
+  const totalMinutes = log.reduce((sum, e) => sum + e.minutes, 0);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Focus history</h2>
+
+        <div className="stats-row">
+          <StatTile num={formatMinutes(todayMinutes)} label="Focused today" />
+          <StatTile num={todayEntries.length} label="Cycles today" />
+          <StatTile num={cosmetics.proHistory ? formatMinutes(totalMinutes) : `${totalCycles}`} label={cosmetics.proHistory ? "All-time focus" : "All-time cycles"} />
+        </div>
+
+        {cosmetics.proHistory ? (
+          <React.Fragment>
+            <h3>This week</h3>
+            <WeekChart log={log} />
+          </React.Fragment>
+        ) : null}
+
+        <h3>Sessions</h3>
+        {groups.length === 0 ? (
+          <p className="history-empty">No focus sessions yet — start a timer and it'll show up here.</p>
+        ) : (
+          groups.map((g) => <SessionGroup key={g.key} group={g} />)
+        )}
+
+        {hasOlderHistory && (
+          <button className="history-upsell" onClick={onOpenShop}>
+            You have older sessions not shown here. <strong>Unlock full history</strong> with Workflo Pro.
+          </button>
+        )}
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. BACKUP MODAL
+//
+// A genuinely free, always-available export/import of the raw
+// "workflo.*" localStorage keys as one JSON file, deliberately NOT
+// gated behind ShopModal — your own data recovery should never be a
+// paid feature. Mirrors the sibling apps' BackupModal exactly.
+// ---------------------------------------------------------------------
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("workflo.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = {
+      app: "workflo",
+      exportedAt: new Date().toISOString(),
+      data: collectBackupData(),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `workflo-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "workflo" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Workflo backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) {
+        return;
+      }
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("workflo.") && typeof value === "string") {
+          localStorage.setItem(key, value);
+        }
+      });
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="modal-subtitle">Save your settings and focus history to a file on this device, or bring them back after a lost or reinstalled phone.</p>
+
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>
+          Download backup
+        </button>
+
+        <label
+          className="btn btn-secondary"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}
+        >
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input
+            type="file"
+            accept="application/json"
+            onChange={handleFileChosen}
+            disabled={restoring}
+            style={{ display: "none" }}
+          />
+        </label>
+
+        {error && <p className="backup-error">{error}</p>}
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. APP — timer state machine + layout
+//
+// Phase cycle: work -> (short break, or long break every Nth cycle) ->
+// work -> ... Each completed *work* interval is logged immediately
+// (see handlePhaseComplete) tagged with a sessionId that's created the
+// first time a phase completes after Reset, so the history view can
+// group consecutive cycles back into "sessions" for display. Breaks
+// are never logged — only real focus time counts toward the totals.
+// ---------------------------------------------------------------------
+
+const PHASE_META = {
+  work: { label: "Focus", sublabel: "Deep work" },
+  break: { label: "Short break", sublabel: "Stretch, hydrate, look away" },
+  longBreak: { label: "Long break", sublabel: "You've earned it" },
+};
+
+function App() {
+  const [settings, setSettings] = useState(loadSettings);
+  const [log, setLog] = useState(loadLog);
+  const [theme, setTheme] = useState(loadTheme);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [label, setLabel] = useState(loadLastLabel);
+
+  const [phase, setPhase] = useState("work"); // "work" | "break" | "longBreak"
+  const [secondsLeft, setSecondsLeft] = useState(() => loadSettings().workMinutes * 60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [cyclesCompleted, setCyclesCompleted] = useState(0);
+  const sessionIdRef = useRef(null);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [banner, setBanner] = useState(null);
+  // Holds the pending auto-hide timeout id across renders. This can't live
+  // as a property on showBanner itself (e.g. `showBanner._t`) because
+  // showBanner is a plain function declared inside App and gets a brand
+  // new function object every render — a property written on one render's
+  // instance is invisible to the next render's clearTimeout call, so nothing
+  // ever actually gets cancelled. In practice that meant two banners fired
+  // within 2.6s of each other (e.g. a phase auto-completes, then the user
+  // taps Skip almost immediately) could have the newer banner cut short by
+  // the first banner's still-pending, uncancelled timeout. A ref persists
+  // across renders, so this is a real handle to cancel.
+  const bannerTimeoutRef = useRef(null);
+
+  // Persist simple pieces of state.
+  useEffect(() => saveSettings(settings), [settings]);
+  useEffect(() => saveLog(log), [log]);
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "classic") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+  useEffect(() => {
+    localStorage.setItem(LAST_LABEL_KEY, label);
+  }, [label]);
+
+  function phaseSeconds(p, s = settings) {
+    if (p === "work") return s.workMinutes * 60;
+    if (p === "longBreak") return s.longBreakMinutes * 60;
+    return s.breakMinutes * 60;
+  }
+
+  function showBanner(text) {
+    setBanner(text);
+    window.clearTimeout(bannerTimeoutRef.current);
+    bannerTimeoutRef.current = window.setTimeout(() => setBanner(null), 2600);
+  }
+
+  function handlePhaseComplete() {
+    playTransitionChime(phase !== "work");
+    vibrateTransition();
+
+    if (phase === "work") {
+      if (!sessionIdRef.current) sessionIdRef.current = makeId();
+      const entry = {
+        id: makeId(),
+        sessionId: sessionIdRef.current,
+        date: todayKey(),
+        label: label.trim(),
+        minutes: settings.workMinutes,
+        completedAt: new Date().toISOString(),
+      };
+      setLog((l) => [...l, entry]);
+
+      const newCycles = cyclesCompleted + 1;
+      setCyclesCompleted(newCycles);
+      const goingLong = newCycles % settings.cyclesUntilLongBreak === 0;
+      const nextPhase = goingLong ? "longBreak" : "break";
+      setPhase(nextPhase);
+      setSecondsLeft(phaseSeconds(nextPhase));
+      showBanner(goingLong ? "Nice work — long break time" : "Focus complete — take a short break");
+    } else {
+      // Coming back from a long break starts a fresh round of cycles — reset
+      // the counter so "Cycle X of N" (Math.min(cyclesCompleted + 1, N) below)
+      // reads 1..N again instead of getting permanently stuck at N. Without
+      // this, cyclesCompleted only ever grows (it's never reset elsewhere),
+      // so every cycle after the first long break displayed as "Cycle N of N"
+      // forever, even though the goingLong modulo check above still fired
+      // correctly every Nth cycle regardless of the reset.
+      if (phase === "longBreak") setCyclesCompleted(0);
+      setPhase("work");
+      setSecondsLeft(phaseSeconds("work"));
+      showBanner("Break's over — back to focus");
+    }
+  }
+
+  // The tick loop. Runs once per second while isRunning; auto-transitions
+  // the phase at zero and keeps going, so a session flows hands-free
+  // once started.
+  useEffect(() => {
+    if (!isRunning) return;
+    if (secondsLeft <= 0) {
+      handlePhaseComplete();
+      return;
+    }
+    const t = window.setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning, secondsLeft]);
+
+  function handleStartPause() {
+    setIsRunning((r) => !r);
+  }
+
+  function handleSkipBreak() {
+    if (phase === "work") return;
+    setPhase("work");
+    setSecondsLeft(phaseSeconds("work"));
+    showBanner("Break skipped — back to focus");
+  }
+
+  function handleReset() {
+    setIsRunning(false);
+    setPhase("work");
+    setSecondsLeft(phaseSeconds("work"));
+    setCyclesCompleted(0);
+    sessionIdRef.current = null;
+  }
+
+  function handleSaveSettings(next) {
+    setSettings(next);
+    // If idle at the very start of a phase, reflect new durations right away.
+    if (!isRunning && secondsLeft === phaseSeconds(phase, settings)) {
+      setSecondsLeft(phaseSeconds(phase, next));
+    }
+  }
+
+  function handlePurchasePack(packId) {
+    setCosmetics((c) => ({ ...c, purchased: [...c.purchased, packId], activePack: packId }));
+  }
+
+  function handleSelectPack(packId) {
+    setCosmetics((c) => ({ ...c, activePack: packId }));
+  }
+
+  function handlePurchaseHistory() {
+    setCosmetics((c) => ({ ...c, proHistory: true }));
+  }
+
+  function handleOpenShop() {
+    setHistoryOpen(false);
+    setCosmetics((c) => (c.shopViewed ? c : { ...c, shopViewed: true }));
+    setShopOpen(true);
+  }
+
+  const total = phaseSeconds(phase);
+  const pct = Math.min(100, Math.round(((total - secondsLeft) / total) * 100));
+  const meta = PHASE_META[phase];
+  const isBreak = phase !== "work";
+
+  return (
+    <div className="app" data-phase={phase}>
+      {banner && <div className="transition-banner">{banner}</div>}
+
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="ring-mark" style={{ background: `conic-gradient(var(--accent-1) ${pct}%, var(--surface-2) 0)` }} />
+          Workflo
+        </h1>
+        <div className="header-actions">
+          <button className="icon-btn" aria-label="Toggle theme" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+          <button className="icon-btn" aria-label="Focus history" onClick={() => setHistoryOpen(true)}>📊</button>
+          <button className="icon-btn" aria-label="Backup and restore" onClick={() => setBackupOpen(true)}>💾</button>
+          <button className="icon-btn" aria-label="Workflo Pro shop" onClick={handleOpenShop}>
+            🎨
+            {!cosmetics.shopViewed && <span className="shop-dot" />}
+          </button>
+          <button className="icon-btn" aria-label="Timer settings" onClick={() => setSettingsOpen(true)}>⚙️</button>
+        </div>
+      </header>
+
+      <TodayStrip log={log} onOpenHistory={() => setHistoryOpen(true)} />
+
+      <main
+        className="timer-stage"
+        style={{
+          "--accent-1": isBreak ? "var(--break-1)" : "var(--work-1)",
+          "--accent-2": isBreak ? "var(--break-2)" : "var(--work-2)",
+        }}
+      >
+        <div className="phase-label">
+          {meta.label}
+          <span className="cycle-count">
+            · Cycle {Math.min(cyclesCompleted + 1, settings.cyclesUntilLongBreak)} of {settings.cyclesUntilLongBreak}
+          </span>
+        </div>
+
+        <div className="timer-ring" style={{ "--pct": `${pct}%` }}>
+          <div className="timer-ring-inner">
+            <span className="timer-time">{formatClock(secondsLeft)}</span>
+            <span className="timer-sublabel">{meta.sublabel}</span>
+          </div>
+        </div>
+
+        {!isBreak && (
+          <div className="label-input-wrap">
+            <input
+              className="label-input"
+              type="text"
+              maxLength={80}
+              placeholder="What are you working on? (optional)"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div className="timer-controls">
+          <button className="control-btn control-btn-secondary" onClick={handleReset}>Reset</button>
+          <button className="control-btn control-btn-main" onClick={handleStartPause}>
+            {isRunning ? "Pause" : secondsLeft === total ? "Start" : "Resume"}
+          </button>
+          {isBreak && (
+            <button className="control-btn control-btn-secondary" onClick={handleSkipBreak}>Skip</button>
+          )}
+        </div>
+      </main>
+
+      {settingsOpen && (
+        <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setSettingsOpen(false)} />
+      )}
+      {shopOpen && (
+        <ShopModal
+          cosmetics={cosmetics}
+          onPurchasePack={handlePurchasePack}
+          onSelectPack={handleSelectPack}
+          onPurchaseHistory={handlePurchaseHistory}
+          onClose={() => setShopOpen(false)}
+        />
+      )}
+      {historyOpen && (
+        <HistoryModal log={log} cosmetics={cosmetics} onOpenShop={handleOpenShop} onClose={() => setHistoryOpen(false)} />
+      )}
+      {backupOpen && <BackupModal onClose={() => setBackupOpen(false)} />}
+    </div>
+  );
+}
+
+function TodayStrip({ log, onOpenHistory }) {
+  const today = todayKey();
+  const entries = log.filter((e) => e.date === today);
+  const minutes = entries.reduce((sum, e) => sum + e.minutes, 0);
+
+  return (
+    <button className="today-strip" onClick={onOpenHistory}>
+      <span className="today-strip-text">
+        {minutes === 0 ? (
+          "No focus sessions yet today"
+        ) : (
+          <React.Fragment>
+            Focused <strong>{formatMinutes(minutes)}</strong> today · {entries.length} cycle{entries.length === 1 ? "" : "s"}
+          </React.Fragment>
+        )}
+      </span>
+      <span className="today-strip-btn">History</span>
+    </button>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

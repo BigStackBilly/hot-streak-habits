@@ -1,0 +1,1459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Ironlog</title>
+<meta name="theme-color" content="#15171b" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this family uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Ironlog" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// IRONLOG — a small local-first strength-training workout log
+//
+// Sibling app to Hot Streak Habits / Thirsty Leaves / etc, same house
+// style: this lives inline in index.html (rather than a separate app.js)
+// so the app can be opened directly as a file:// URL with zero
+// server/build step — the in-browser Babel transformer can't fetch a
+// separate local script file over file://, but it can transform a
+// script that's already inline.
+//
+// Genuinely different domain from every sibling app: this isn't about a
+// daily check-in streak, it's about progressive overload — sets, reps,
+// and weight per exercise, with an honest personal-record callout
+// (heaviest weight ever logged at a given rep count) instead of any
+// streak-guilt mechanic. Lifters don't train daily, so the only "cadence"
+// stat here is a plain "workouts this week/month" count.
+//
+// ARCHITECTURE NOTE (read this before touching state): every setState
+// call in this file is either (a) a plain top-level statement in an
+// event-handler function, passing an already-built value, or (b) a
+// functional updater whose body is pure and calls nothing else. No
+// updater passed to setState ever calls another component's setState or
+// a prop callback from inside itself — that specific pattern (a child's
+// setState updater reaching into a parent's setState) is what broke a
+// sibling app earlier with "Cannot update a component while rendering a
+// different component". Active-workout state lives in App itself (not
+// pushed down into a child with its own local state machine) specifically
+// to keep this simple and avoid that whole bug class.
+//
+// Organized top to bottom as:
+//   1. Date/id helpers        - "YYYY-MM-DD" keys, ids, formatting
+//   2. Domain math             - PR lookups, volume, weekly/monthly counts
+//   3. localStorage helpers    - load/save exercises, history, theme, pro
+//   4. Sound helpers            - Web Audio beeps, no audio files shipped
+//   5. Small presentational components (EmptyState, NumberStepper, Confetti)
+//   6. CustomExerciseForm + ExercisePickerModal
+//   7. ExerciseLogCard + ActiveWorkoutScreen
+//   8. WorkoutHistoryCard + WorkoutDetailModal
+//   9. ExerciseListRow + ExerciseHistoryModal
+//   10. UpgradeModal (Pro paywall + accent packs)
+//   11. BackupModal
+//   12. App - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect, useRef, useMemo } = React;
+
+const EXERCISES_KEY = "ironlog.exercises.v1";
+const HISTORY_KEY = "ironlog.workoutHistory.v1";
+const THEME_KEY = "ironlog.theme.v1";
+const PRO_KEY = "ironlog.pro.v1";
+const COSMETICS_KEY = "ironlog.cosmetics.v1";
+const BACKUP_PREFIX = "ironlog.";
+
+const MAX_FREE_CUSTOM_EXERCISES = 3;
+const PRO_PRICE = "$4.99";
+
+const CATEGORY_ORDER = ["Chest", "Back", "Shoulders", "Arms", "Legs", "Glutes", "Core", "Other"];
+
+// A solid ~15-item starter library covering the major lifts/muscle groups.
+// Ids are stable strings (not makeId()) so they survive re-seeding and stay
+// readable in localStorage.
+const DEFAULT_EXERCISES = [
+  { id: "bench-press", name: "Bench Press", emoji: "🏋️", muscleGroup: "Chest" },
+  { id: "squat", name: "Squat", emoji: "🦵", muscleGroup: "Legs" },
+  { id: "deadlift", name: "Deadlift", emoji: "🏋️‍♂️", muscleGroup: "Back" },
+  { id: "overhead-press", name: "Overhead Press", emoji: "🙌", muscleGroup: "Shoulders" },
+  { id: "barbell-row", name: "Barbell Row", emoji: "🚣", muscleGroup: "Back" },
+  { id: "pull-up", name: "Pull-up", emoji: "🧗", muscleGroup: "Back" },
+  { id: "bicep-curl", name: "Bicep Curl", emoji: "💪", muscleGroup: "Arms" },
+  { id: "tricep-extension", name: "Tricep Extension", emoji: "🔻", muscleGroup: "Arms" },
+  { id: "lunge", name: "Lunge", emoji: "🏃", muscleGroup: "Legs" },
+  { id: "plank", name: "Plank", emoji: "🧘", muscleGroup: "Core" },
+  { id: "dumbbell-fly", name: "Dumbbell Fly", emoji: "🦋", muscleGroup: "Chest" },
+  { id: "leg-press", name: "Leg Press", emoji: "🦿", muscleGroup: "Legs" },
+  { id: "lat-pulldown", name: "Lat Pulldown", emoji: "⬇️", muscleGroup: "Back" },
+  { id: "hip-thrust", name: "Hip Thrust", emoji: "🍑", muscleGroup: "Glutes" },
+  { id: "calf-raise", name: "Calf Raise", emoji: "🦶", muscleGroup: "Legs" },
+];
+
+const CUSTOM_EMOJI_CHOICES = [
+  "🏋️", "🦵", "💪", "🔻", "🚣", "🧗", "🍑", "🦶",
+  "⬇️", "🦿", "🧘", "🏃", "🦋", "🙌", "🔥", "⚡",
+  "🎯", "🥇", "🏆", "🔩", "⚙️", "🥊", "🤸", "🛞",
+];
+
+// Cosmetic accent packs. "iron" (hot orange) is the free default; the rest
+// are paid re-skins of the same --accent-1/--accent-2 gradient variables
+// (see [data-pack="..."] rules in styles.css) — no logic changes, just
+// color. Bundled into the single Pro unlock rather than sold separately.
+const ACCENT_PACKS = [
+  { id: "iron", name: "Iron", free: true, colors: ["#FF5A1F", "#FF8A3D"] },
+  { id: "steel", name: "Steel", colors: ["#3E7CB1", "#6FB1E3"] },
+  { id: "volt", name: "Volt", colors: ["#8FBF2E", "#D4F542"] },
+];
+
+// ---------------------------------------------------------------------
+// 1. DATE / ID HELPERS
+//
+// We store each workout's date as a "YYYY-MM-DD" string in the user's
+// LOCAL timezone. Deliberately not `date.toISOString()` anywhere — that
+// converts to UTC first, so a workout logged at 9pm west of Greenwich
+// could silently land under tomorrow's date. Building the string manually
+// from getFullYear/getMonth/getDate keeps it anchored to the user's
+// actual calendar day.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+// Number of days from keyA to keyB (positive if keyB is later). Goes via
+// Date.UTC on the individual Y/M/D numbers so DST transitions can't shift
+// the result by an hour and round to the wrong day count.
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatDate(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatDuration(sec) {
+  if (!sec || sec < 60) return `${Math.max(1, sec || 0)}s`;
+  const mins = Math.round(sec / 60);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+function formatElapsed(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+function formatWeight(w) {
+  // Trim trailing ".0"/".00" but keep genuine fractions like 137.5.
+  const n = Math.round(w * 100) / 100;
+  return Number.isInteger(n) ? String(n) : String(n);
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+// ---------------------------------------------------------------------
+// 2. DOMAIN MATH
+//
+// A workout's `exercises` array holds { exerciseId, name, emoji, sets },
+// and each set is { weight, reps, isPR }. `isPR` is computed and frozen
+// onto the set the moment it's logged (see App.addSetToActiveWorkout) by
+// comparing against every previously SAVED workout — never the in-progress
+// one — so it's an honest record of "this beat everything before it",
+// and never needs recomputing later.
+// ---------------------------------------------------------------------
+
+// Heaviest weight ever logged for `exerciseId` at exactly `reps` reps,
+// across completed (saved) workout history. Returns 0 if there's no prior
+// data at that rep count — which is also how callers know "no PR to beat
+// yet" vs. "PR of 0".
+function getBestWeightForReps(history, exerciseId, reps) {
+  let best = 0;
+  for (const workout of history) {
+    for (const ex of workout.exercises) {
+      if (ex.exerciseId !== exerciseId) continue;
+      for (const set of ex.sets) {
+        if (set.reps === reps && set.weight > best) best = set.weight;
+      }
+    }
+  }
+  return best;
+}
+
+// The most recently logged set for an exercise, scanning history newest
+// workout first — used only to seed sensible starting weight/reps defaults
+// on a fresh ExerciseLogCard, never for PR math.
+function getMostRecentSet(history, exerciseId) {
+  const sorted = [...history].sort((a, b) => b.finishedAt - a.finishedAt);
+  for (const workout of sorted) {
+    const ex = workout.exercises.find((e) => e.exerciseId === exerciseId);
+    if (ex && ex.sets.length > 0) return ex.sets[ex.sets.length - 1];
+  }
+  return null;
+}
+
+// Full stats bundle for the per-exercise history screen: an all-time best
+// set (heaviest weight at any rep count), a PR table keyed by rep count,
+// and every past session's sets, newest first.
+function getExerciseStats(history, exerciseId) {
+  const sessions = [];
+  const prByReps = {};
+  let bestSet = null;
+
+  const sorted = [...history].sort((a, b) => b.finishedAt - a.finishedAt);
+  for (const workout of sorted) {
+    const ex = workout.exercises.find((e) => e.exerciseId === exerciseId);
+    if (!ex || ex.sets.length === 0) continue;
+    sessions.push({ date: workout.date, sets: ex.sets });
+    for (const set of ex.sets) {
+      if (!prByReps[set.reps] || set.weight > prByReps[set.reps]) prByReps[set.reps] = set.weight;
+      if (!bestSet || set.weight > bestSet.weight) bestSet = set;
+    }
+  }
+
+  const prRows = Object.keys(prByReps)
+    .map((reps) => ({ reps: Number(reps), weight: prByReps[reps] }))
+    .sort((a, b) => b.weight - a.weight);
+
+  return { sessions, prRows, bestSet, totalWorkouts: sessions.length };
+}
+
+function computeSetVolume(set) {
+  return set.weight * set.reps;
+}
+
+function computeWorkoutVolume(exercises) {
+  return exercises.reduce((sum, ex) => sum + ex.sets.reduce((s, set) => s + computeSetVolume(set), 0), 0);
+}
+
+// "This week" = trailing 7 days including today (not a Mon-Sun calendar
+// week) — matches how lifters actually think about a training week
+// regardless of which day they started on. "This month" = same calendar
+// month+year as today.
+function computeCadence(history) {
+  const todayK = todayKey();
+  const now = new Date();
+  let week = 0;
+  let month = 0;
+  for (const w of history) {
+    const gap = daysBetween(w.date, todayK);
+    if (gap >= 0 && gap < 7) week++;
+    const [y, m] = w.date.split("-").map(Number);
+    if (y === now.getFullYear() && m === now.getMonth() + 1) month++;
+  }
+  return { week, month };
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadExercises() {
+  try {
+    const raw = localStorage.getItem(EXERCISES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  const seeded = DEFAULT_EXERCISES.map((e) => ({ ...e }));
+  localStorage.setItem(EXERCISES_KEY, JSON.stringify(seeded));
+  return seeded;
+}
+
+function saveExercises(exercises) {
+  localStorage.setItem(EXERCISES_KEY, JSON.stringify(exercises));
+}
+
+function loadWorkoutHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveWorkoutHistory(history) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+}
+
+// Dark is the default here (deliberately, unlike the lighter sibling
+// apps) — it fits the gym aesthetic and there's no prior "light-first"
+// convention to preserve for a brand-new app.
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "dark";
+}
+
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function savePro(pro) {
+  localStorage.setItem(PRO_KEY, JSON.stringify(pro));
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { activePack: "iron" };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+// Every "ironlog.*"-prefixed key currently in localStorage, gathered by
+// prefix rather than a hardcoded list so a future new key is automatically
+// swept up without this function needing an update.
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(BACKUP_PREFIX)) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+// ---------------------------------------------------------------------
+// 4. SOUND HELPERS — Web Audio beeps, no audio file shipped
+// ---------------------------------------------------------------------
+
+function playTone(freq, startAt, duration, ctx) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = "sine";
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+  gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + startAt + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + duration);
+  osc.start(ctx.currentTime + startAt);
+  osc.stop(ctx.currentTime + startAt + duration);
+}
+
+// A short, low "thunk" when a plain set is logged — deliberately quiet and
+// unremarkable so it doesn't compete with the PR fanfare below.
+function playSetLogged() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    playTone(340, 0, 0.09, ctx);
+  } catch {}
+}
+
+// A brighter three-note rise for a new personal record.
+function playPRFanfare() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    playTone(523, 0, 0.14, ctx);
+    playTone(659, 0.1, 0.14, ctx);
+    playTone(880, 0.2, 0.22, ctx);
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ onStart }) {
+  return (
+    <div className="empty-state">
+      <div className="emoji">🏋️</div>
+      <h2>No workouts yet</h2>
+      <p>Pick a few exercises, log your sets as you go, and watch your numbers climb.</p>
+      <button className="btn btn-primary" style={{ padding: "14px 28px" }} onClick={onStart}>
+        + Start your first workout
+      </button>
+    </div>
+  );
+}
+
+// A thumb-friendly weight/reps control: +/- buttons around a directly
+// editable number input, so a big jump (e.g. 45 -> 225) doesn't need
+// dozens of taps.
+function NumberStepper({ label, value, onChange, step, min, max, suffix }) {
+  function clamp(v) {
+    let n = v;
+    if (min != null) n = Math.max(min, n);
+    if (max != null) n = Math.min(max, n);
+    return round2(n);
+  }
+  function dec() {
+    onChange(clamp(value - step));
+  }
+  function inc() {
+    onChange(clamp(value + step));
+  }
+  function handleInput(e) {
+    const raw = e.target.value;
+    if (raw === "") {
+      onChange(0);
+      return;
+    }
+    const n = parseFloat(raw);
+    if (!isNaN(n)) onChange(clamp(n));
+  }
+  return (
+    <div className="stepper">
+      <span className="stepper-label">{label}</span>
+      <div className="stepper-controls">
+        <button type="button" className="stepper-btn" onClick={dec} aria-label={`Decrease ${label}`}>−</button>
+        <input
+          type="number"
+          inputMode="decimal"
+          className="stepper-input"
+          value={value}
+          onChange={handleInput}
+        />
+        <button type="button" className="stepper-btn" onClick={inc} aria-label={`Increase ${label}`}>+</button>
+      </div>
+      {suffix && <span className="stepper-suffix">{suffix}</span>}
+    </div>
+  );
+}
+
+// A short burst of falling colored rectangles for a PR moment — purely
+// CSS-driven, no confetti library.
+function Confetti() {
+  const colors = ["#FF5A1F", "#FFC93C", "#FF8A3D", "#ffffff", "#3E7CB1"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+function groupByCategory(exercises) {
+  const groups = {};
+  for (const ex of exercises) {
+    const cat = CATEGORY_ORDER.includes(ex.muscleGroup) ? ex.muscleGroup : "Other";
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(ex);
+  }
+  return CATEGORY_ORDER.filter((cat) => groups[cat] && groups[cat].length > 0).map((cat) => ({
+    category: cat,
+    items: groups[cat],
+  }));
+}
+
+// ---------------------------------------------------------------------
+// 6. CUSTOM EXERCISE FORM + EXERCISE PICKER MODAL
+// ---------------------------------------------------------------------
+
+function CustomExerciseForm({ onCreate, onCancel }) {
+  const [name, setName] = useState("");
+  const [emoji, setEmoji] = useState(CUSTOM_EMOJI_CHOICES[0]);
+  const [muscleGroup, setMuscleGroup] = useState("Other");
+  const canCreate = name.trim().length > 0;
+
+  function handleCreate() {
+    if (!canCreate) return;
+    onCreate({ name: name.trim(), emoji, muscleGroup });
+  }
+
+  return (
+    <div className="custom-exercise-form">
+      <label className="field-label" htmlFor="custom-ex-name">Exercise name</label>
+      <input
+        id="custom-ex-name"
+        className="name-input"
+        placeholder="e.g. Cable Crossover"
+        value={name}
+        maxLength={40}
+        autoFocus
+        onChange={(e) => setName(e.target.value)}
+      />
+
+      <label className="field-label">Icon</label>
+      <div className="emoji-grid">
+        {CUSTOM_EMOJI_CHOICES.map((e) => (
+          <button
+            key={e}
+            type="button"
+            className={`emoji-option ${emoji === e ? "selected" : ""}`}
+            onClick={() => setEmoji(e)}
+          >
+            {e}
+          </button>
+        ))}
+      </div>
+
+      <label className="field-label">Muscle group</label>
+      <div className="chip-row">
+        {CATEGORY_ORDER.map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            className={`preset-chip ${muscleGroup === cat ? "selected" : ""}`}
+            onClick={() => setMuscleGroup(cat)}
+          >
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      <div className="modal-buttons" style={{ marginTop: 16 }}>
+        <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-primary" disabled={!canCreate} onClick={handleCreate}>
+          Add exercise
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Used both to start a fresh workout (mode="start") and to add more
+// exercises to one already in progress (mode="add"). `excludeIds` hides
+// exercises already part of the active workout in "add" mode.
+function ExercisePickerModal({ exercises, excludeIds, mode, onConfirm, onCreateCustom, onClose }) {
+  const [selected, setSelected] = useState(() => new Set());
+  const [showCustomForm, setShowCustomForm] = useState(false);
+
+  const available = exercises.filter((e) => !excludeIds.includes(e.id));
+  const grouped = groupByCategory(available);
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // onCreateCustom is a plain prop call (App.createCustomExercise), not
+  // nested inside a setState updater — it runs, returns the new id
+  // synchronously (or null if the free-tier cap blocked it and the
+  // Upgrade modal opened instead), and only THEN do we touch this
+  // component's own local `selected` state.
+  function handleCreateCustom(data) {
+    const newId = onCreateCustom(data);
+    setShowCustomForm(false);
+    if (newId) {
+      setSelected((prev) => new Set(prev).add(newId));
+    }
+  }
+
+  const confirmLabel = mode === "start"
+    ? `Start Workout (${selected.size})`
+    : `Add ${selected.size} exercise${selected.size === 1 ? "" : "s"}`;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{mode === "start" ? "Choose exercises" : "Add exercises"}</h2>
+
+        <div className="picker-list">
+          {grouped.map((group) => (
+            <div key={group.category} className="picker-group">
+              <div className="picker-group-label">{group.category}</div>
+              {group.items.map((ex) => (
+                <button
+                  key={ex.id}
+                  type="button"
+                  className={`picker-row ${selected.has(ex.id) ? "selected" : ""}`}
+                  onClick={() => toggle(ex.id)}
+                >
+                  <span className="picker-row-emoji">{ex.emoji}</span>
+                  <span className="picker-row-name">{ex.name}</span>
+                  <span className="picker-check">{selected.has(ex.id) ? "✓" : ""}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+          {available.length === 0 && (
+            <p className="upgrade-copy">Every library exercise is already in this workout.</p>
+          )}
+        </div>
+
+        {showCustomForm ? (
+          <CustomExerciseForm onCreate={handleCreateCustom} onCancel={() => setShowCustomForm(false)} />
+        ) : (
+          <button type="button" className="btn btn-secondary" style={{ width: "100%", marginTop: 4 }} onClick={() => setShowCustomForm(true)}>
+            + Add custom exercise
+          </button>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 16 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={selected.size === 0} onClick={() => onConfirm(Array.from(selected))}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. EXERCISE LOG CARD + ACTIVE WORKOUT SCREEN
+// ---------------------------------------------------------------------
+
+// One exercise's card inside an in-progress workout: logged sets so far,
+// a weight/reps stepper, "Log set", and "Same as last set". Weight/reps
+// are LOCAL state seeded once (via the lazy useState initializer) from
+// either this exercise's last logged set this session, or its most
+// recent historical set, or a plain default — never re-seeded on re-render,
+// so typing/adjusting mid-workout doesn't get clobbered.
+function ExerciseLogCard({ exercise, workoutHistory, onLogSet }) {
+  const lastSetThisSession = exercise.sets[exercise.sets.length - 1] || null;
+
+  const [weight, setWeight] = useState(() => {
+    if (lastSetThisSession) return lastSetThisSession.weight;
+    const recent = getMostRecentSet(workoutHistory, exercise.exerciseId);
+    return recent ? recent.weight : 45;
+  });
+  const [reps, setReps] = useState(() => {
+    if (lastSetThisSession) return lastSetThisSession.reps;
+    const recent = getMostRecentSet(workoutHistory, exercise.exerciseId);
+    return recent ? recent.reps : 8;
+  });
+
+  function handleLog() {
+    onLogSet(exercise.exerciseId, weight, reps);
+  }
+
+  function handleSameAsLast() {
+    if (!lastSetThisSession) return;
+    onLogSet(exercise.exerciseId, lastSetThisSession.weight, lastSetThisSession.reps);
+  }
+
+  return (
+    <div className="exercise-log-card">
+      <div className="exercise-log-header">
+        <span className="exercise-log-emoji">{exercise.emoji}</span>
+        <span className="exercise-log-name">{exercise.name}</span>
+      </div>
+
+      {exercise.sets.length > 0 && (
+        <div className="set-rows">
+          {exercise.sets.map((set, i) => (
+            <div key={i} className={`set-row ${set.isPR ? "pr" : ""}`}>
+              <span className="set-index">Set {i + 1}</span>
+              <span className="set-value">{formatWeight(set.weight)} lbs × {set.reps}</span>
+              {set.isPR && <span className="pr-badge">🏆 PR</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="stepper-row">
+        <NumberStepper label="Weight" value={weight} onChange={setWeight} step={5} min={0} suffix="lbs" />
+        <NumberStepper label="Reps" value={reps} onChange={setReps} step={1} min={1} />
+      </div>
+
+      <div className="log-actions">
+        <button type="button" className="btn btn-primary log-set-btn" onClick={handleLog}>
+          + Log set
+        </button>
+        {lastSetThisSession && (
+          <button type="button" className="btn btn-secondary same-as-last-btn" onClick={handleSameAsLast}>
+            ↻ Same as last
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActiveWorkoutScreen({ activeWorkout, workoutHistory, onLogSet, onAddExercise, onFinish, onCancel }) {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - activeWorkout.startedAt) / 1000));
+  const totalSets = activeWorkout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
+
+  return (
+    <div className="active-workout-screen">
+      <div className="active-workout-header">
+        <div>
+          <div className="active-workout-title">Workout in progress</div>
+          <div className="active-workout-timer">⏱ {formatElapsed(elapsedSec)} · {totalSets} set{totalSets === 1 ? "" : "s"} logged</div>
+        </div>
+        <button className="icon-btn" onClick={onCancel} aria-label="Cancel workout">✕</button>
+      </div>
+
+      <div className="active-exercise-list">
+        {activeWorkout.exercises.map((ex) => (
+          <ExerciseLogCard
+            key={ex.exerciseId}
+            exercise={ex}
+            workoutHistory={workoutHistory}
+            onLogSet={onLogSet}
+          />
+        ))}
+
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={onAddExercise}>
+          + Add exercise
+        </button>
+      </div>
+
+      <div className="finish-bar">
+        <button type="button" className="btn btn-primary finish-btn" onClick={onFinish}>
+          ✓ Finish workout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. WORKOUT HISTORY CARD + WORKOUT DETAIL MODAL
+// ---------------------------------------------------------------------
+
+function WorkoutHistoryCard({ workout, onTap }) {
+  const names = workout.exercises.map((e) => e.name);
+  const summary = names.length <= 2 ? names.join(", ") : `${names.slice(0, 2).join(", ")} +${names.length - 2} more`;
+  const totalSets = workout.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
+
+  return (
+    <button type="button" className="workout-card" onClick={() => onTap(workout)}>
+      <div className="workout-card-top">
+        <span className="workout-card-date">{formatDate(workout.date)}</span>
+        <span className="workout-card-duration">{formatDuration(workout.durationSec)}</span>
+      </div>
+      <div className="workout-card-summary">{summary}</div>
+      <div className="workout-card-stats">
+        {workout.exercises.length} exercise{workout.exercises.length === 1 ? "" : "s"} · {totalSets} set{totalSets === 1 ? "" : "s"} · {Math.round(workout.totalVolume).toLocaleString()} lbs volume
+      </div>
+    </button>
+  );
+}
+
+function WorkoutDetailModal({ workout, onClose, onDelete }) {
+  function handleDelete() {
+    if (window.confirm("Delete this workout? This can't be undone.")) {
+      onDelete(workout.id);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{formatDate(workout.date)}</h2>
+        <p className="upgrade-copy">
+          {formatDuration(workout.durationSec)} · {Math.round(workout.totalVolume).toLocaleString()} lbs total volume
+        </p>
+
+        <div className="detail-exercise-list">
+          {workout.exercises.map((ex) => (
+            <div key={ex.exerciseId} className="detail-exercise">
+              <div className="detail-exercise-header">
+                <span>{ex.emoji}</span>
+                <span className="detail-exercise-name">{ex.name}</span>
+              </div>
+              <div className="set-rows">
+                {ex.sets.map((set, i) => (
+                  <div key={i} className={`set-row ${set.isPR ? "pr" : ""}`}>
+                    <span className="set-index">Set {i + 1}</span>
+                    <span className="set-value">{formatWeight(set.weight)} lbs × {set.reps}</span>
+                    {set.isPR && <span className="pr-badge">🏆 PR</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="modal-buttons" style={{ marginTop: 18 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+        <button className="btn-danger" style={{ width: "100%", marginTop: 10 }} onClick={handleDelete}>
+          Delete workout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 9. EXERCISE LIST ROW + EXERCISE HISTORY MODAL
+// ---------------------------------------------------------------------
+
+function ExerciseListRow({ exercise, workoutHistory, onTap }) {
+  const stats = useMemo(() => getExerciseStats(workoutHistory, exercise.id), [workoutHistory, exercise.id]);
+  return (
+    <button type="button" className="exercise-row" onClick={() => onTap(exercise)}>
+      <span className="picker-row-emoji">{exercise.emoji}</span>
+      <div className="exercise-row-info">
+        <span className="exercise-row-name">{exercise.name}</span>
+        <span className="exercise-row-sub">{exercise.muscleGroup}{exercise.isCustom ? " · Custom" : ""}</span>
+      </div>
+      <span className="exercise-row-best">
+        {stats.bestSet ? `${formatWeight(stats.bestSet.weight)} lbs × ${stats.bestSet.reps}` : "No sets yet"}
+      </span>
+    </button>
+  );
+}
+
+function ExerciseHistoryModal({ exercise, workoutHistory, onClose }) {
+  const stats = useMemo(() => getExerciseStats(workoutHistory, exercise.id), [workoutHistory, exercise.id]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{exercise.emoji} {exercise.name}</h2>
+
+        {stats.bestSet ? (
+          <div className="best-set-callout">
+            <span className="best-set-label">All-time best</span>
+            <span className="best-set-value">{formatWeight(stats.bestSet.weight)} lbs × {stats.bestSet.reps}</span>
+          </div>
+        ) : (
+          <p className="upgrade-copy">No sets logged yet — do this exercise in a workout to start tracking records.</p>
+        )}
+
+        {stats.prRows.length > 0 && (
+          <>
+            <label className="field-label" style={{ marginTop: 16 }}>Personal records by rep count</label>
+            <div className="pr-table">
+              {stats.prRows.map((row) => (
+                <div key={row.reps} className="pr-table-row">
+                  <span>{row.reps} rep{row.reps === 1 ? "" : "s"}</span>
+                  <span className="pr-table-weight">{formatWeight(row.weight)} lbs</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {stats.sessions.length > 0 && (
+          <>
+            <label className="field-label" style={{ marginTop: 16 }}>History ({stats.totalWorkouts} session{stats.totalWorkouts === 1 ? "" : "s"})</label>
+            <div className="detail-exercise-list">
+              {stats.sessions.map((session, idx) => (
+                <div key={idx} className="detail-exercise">
+                  <div className="detail-exercise-header">
+                    <span className="detail-exercise-name">{formatDate(session.date)}</span>
+                  </div>
+                  <div className="set-rows">
+                    {session.sets.map((set, i) => (
+                      <div key={i} className={`set-row ${set.isPR ? "pr" : ""}`}>
+                        <span className="set-index">Set {i + 1}</span>
+                        <span className="set-value">{formatWeight(set.weight)} lbs × {set.reps}</span>
+                        {set.isPR && <span className="pr-badge">🏆 PR</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 18 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 10. UPGRADE MODAL — Pro paywall + accent color packs
+//
+// A single bundled "Pro" unlock (mirrors the sibling apps' honest
+// "not wired to real billing yet" pattern): unlimited custom exercises
+// (free tier caps at MAX_FREE_CUSTOM_EXERCISES) plus two extra accent
+// color packs. "Purchasing" only flips a local flag — the footer note
+// is upfront that real App Store/Play Store billing isn't wired up yet.
+// ---------------------------------------------------------------------
+
+function UpgradeModal({ pro, cosmetics, onPurchase, onSelectPack, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Ironlog Pro</h2>
+
+        {pro.owned ? (
+          <p className="upgrade-copy">✓ Pro is unlocked on this device — thanks for the support. Unlimited custom exercises, and every accent pack below is unlocked.</p>
+        ) : (
+          <>
+            <p className="upgrade-copy">
+              Free plan: up to {MAX_FREE_CUSTOM_EXERCISES} custom exercises (the default library is always unlimited). Unlock Pro for unlimited custom exercises plus two extra accent colors.
+            </p>
+            <ul className="upgrade-list">
+              <li>Unlimited custom exercises (free plan: {MAX_FREE_CUSTOM_EXERCISES})</li>
+              <li>Steel and Volt accent packs</li>
+              <li>Everything else — logging, history, PRs, backup — stays exactly the same</li>
+              <li>One-time unlock, no subscription</li>
+            </ul>
+          </>
+        )}
+
+        <label className="field-label">Accent color</label>
+        <div className="theme-grid">
+          {ACCENT_PACKS.map((pack) => {
+            const unlocked = pack.free || pro.owned;
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""} ${unlocked ? "" : "locked"}`}
+                onClick={() => unlocked && onSelectPack(pack.id)}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.colors[0]}, ${pack.colors[1]})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">{active ? "Active" : unlocked ? "Select" : "🔒 Pro"}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {!pro.owned && (
+          <div className="modal-buttons-column" style={{ marginTop: 14 }}>
+            <button className="btn btn-primary" onClick={onPurchase}>Unlock Pro — {PRO_PRICE}</button>
+            <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+          </div>
+        )}
+        {pro.owned && (
+          <div className="modal-buttons" style={{ marginTop: 14 }}>
+            <button className="btn btn-primary" onClick={onClose}>Close</button>
+          </div>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 11. BACKUP MODAL — export/import everything to a local JSON file
+//
+// Deliberately NOT gated behind Pro: losing your entire lifting history
+// and PRs because a phone was lost or reinstalled is a real trust
+// problem, and locking someone's own data recovery behind a paywall
+// would be predatory. Fully local — reads/writes localStorage directly
+// and triggers a normal browser file download/upload, no network calls.
+// ---------------------------------------------------------------------
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = collectBackupData();
+    const payload = { app: "ironlog", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ironlog-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+
+      if (!parsed || parsed.app !== "ironlog" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like an Ironlog backup file." });
+        return;
+      }
+
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+
+      // Wipe existing ironlog.* keys first so a restore from an older/
+      // smaller backup doesn't leave orphaned keys behind, then write the
+      // backup's keys.
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(BACKUP_PREFIX)) localStorage.removeItem(key);
+      }
+      Object.keys(parsed.data).forEach((key) => {
+        localStorage.setItem(key, parsed.data[key]);
+      });
+      window.location.reload();
+    };
+    reader.onerror = () => {
+      setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+
+        <p className="upgrade-copy">
+          Save every exercise, workout, and personal record to a file on your device — and bring it all back later, even after reinstalling or switching phones.
+        </p>
+
+        <label className="field-label">Download</label>
+        <button type="button" className="btn btn-primary" style={{ width: "100%", marginBottom: 18 }} onClick={handleDownload}>
+          ⬇ Download backup
+        </button>
+
+        <label className="field-label">Restore</label>
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={handleRestoreClick}>
+          ⬆ Restore from backup
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="backup-file-input"
+          onChange={handleFileChange}
+        />
+
+        {status && (
+          <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>
+            {status.text}
+          </p>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 12. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [exercises, setExercises] = useState(loadExercises);
+  const [workoutHistory, setWorkoutHistory] = useState(loadWorkoutHistory);
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+
+  const [tab, setTab] = useState("workouts"); // "workouts" | "exercises"
+  const [activeWorkout, setActiveWorkout] = useState(null);
+
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState("start"); // "start" | "add"
+
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [customModalOpen, setCustomModalOpen] = useState(false);
+  const [workoutDetail, setWorkoutDetail] = useState(null); // workout object or null
+  const [exerciseHistoryTarget, setExerciseHistoryTarget] = useState(null); // exercise object or null
+
+  const [prBanner, setPrBanner] = useState(null);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [finishToast, setFinishToast] = useState(null);
+
+  useEffect(() => {
+    saveExercises(exercises);
+  }, [exercises]);
+
+  useEffect(() => {
+    saveWorkoutHistory(workoutHistory);
+  }, [workoutHistory]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    savePro(pro);
+  }, [pro]);
+
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "iron") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  // Warn before an accidental tab close/reload mid-workout — logged sets
+  // only get persisted to workoutHistory once "Finish workout" is tapped.
+  useEffect(() => {
+    function handleBeforeUnload(e) {
+      if (activeWorkout && activeWorkout.exercises.some((ex) => ex.sets.length > 0)) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeWorkout]);
+
+  const customCount = exercises.filter((e) => e.isCustom).length;
+
+  // Returns the new exercise's id on success, or null if the free-tier
+  // custom-exercise cap blocked it (in which case the Upgrade modal opens
+  // as a plain top-level call right here — not from inside any setState
+  // updater).
+  function createCustomExercise({ name, emoji, muscleGroup }) {
+    if (!pro.owned && customCount >= MAX_FREE_CUSTOM_EXERCISES) {
+      setUpgradeModalOpen(true);
+      return null;
+    }
+    const ex = { id: makeId(), name, emoji, muscleGroup, isCustom: true };
+    setExercises((prev) => [...prev, ex]);
+    return ex.id;
+  }
+
+  function handleCreateCustomFromTab(data) {
+    createCustomExercise(data);
+    setCustomModalOpen(false);
+  }
+
+  function openStartPicker() {
+    setPickerMode("start");
+    setPickerOpen(true);
+  }
+
+  function openAddPicker() {
+    setPickerMode("add");
+    setPickerOpen(true);
+  }
+
+  function handlePickerConfirm(selectedIds) {
+    const chosen = selectedIds.map((id) => exercises.find((e) => e.id === id)).filter(Boolean);
+    if (chosen.length === 0) {
+      setPickerOpen(false);
+      return;
+    }
+    const additions = chosen.map((e) => ({ exerciseId: e.id, name: e.name, emoji: e.emoji, sets: [] }));
+
+    if (pickerMode === "start") {
+      setActiveWorkout({
+        id: makeId(),
+        date: todayKey(),
+        startedAt: Date.now(),
+        exercises: additions,
+      });
+    } else if (activeWorkout) {
+      setActiveWorkout({ ...activeWorkout, exercises: [...activeWorkout.exercises, ...additions] });
+    }
+    setPickerOpen(false);
+  }
+
+  // The single entry point for logging a set. Reads `activeWorkout` and
+  // `workoutHistory` straight from this render's closure (both are
+  // App's own top-level state, always current), computes the PR flag,
+  // then calls setActiveWorkout with an already-built plain object — not
+  // a functional updater — so there's no updater body that could ever
+  // reach into another component's setState.
+  function addSetToActiveWorkout(exerciseId, weight, reps) {
+    if (!activeWorkout) return;
+    const bestPrior = getBestWeightForReps(workoutHistory, exerciseId, reps);
+    const isPR = bestPrior > 0 && weight > bestPrior;
+    const newSet = { weight, reps, isPR };
+
+    const targetExercise = activeWorkout.exercises.find((ex) => ex.exerciseId === exerciseId);
+    const updatedExercises = activeWorkout.exercises.map((ex) =>
+      ex.exerciseId === exerciseId ? { ...ex, sets: [...ex.sets, newSet] } : ex
+    );
+    setActiveWorkout({ ...activeWorkout, exercises: updatedExercises });
+
+    playSetLogged();
+    if (isPR && targetExercise) {
+      setPrBanner(`🏆 New PR! ${targetExercise.name} — ${formatWeight(weight)} lbs × ${reps}`);
+      setShowConfetti(true);
+      playPRFanfare();
+      setTimeout(() => setPrBanner(null), 3200);
+      setTimeout(() => setShowConfetti(false), 1800);
+    }
+  }
+
+  function cancelActiveWorkout() {
+    if (!activeWorkout) return;
+    const hasSets = activeWorkout.exercises.some((ex) => ex.sets.length > 0);
+    if (hasSets && !window.confirm("Discard this workout? Logged sets will be lost.")) return;
+    setActiveWorkout(null);
+  }
+
+  function finishActiveWorkout() {
+    if (!activeWorkout) return;
+    const exercisesWithSets = activeWorkout.exercises.filter((ex) => ex.sets.length > 0);
+    if (exercisesWithSets.length === 0) {
+      if (window.confirm("No sets logged yet — discard this workout?")) setActiveWorkout(null);
+      return;
+    }
+
+    const finishedAt = Date.now();
+    const durationSec = Math.max(1, Math.round((finishedAt - activeWorkout.startedAt) / 1000));
+    const finishedWorkout = {
+      id: activeWorkout.id,
+      date: activeWorkout.date,
+      startedAt: activeWorkout.startedAt,
+      finishedAt,
+      durationSec,
+      exercises: exercisesWithSets,
+      totalVolume: computeWorkoutVolume(exercisesWithSets),
+    };
+
+    setWorkoutHistory((prev) => [finishedWorkout, ...prev]);
+    setActiveWorkout(null);
+    setFinishToast("Workout saved!");
+    setTimeout(() => setFinishToast(null), 2600);
+  }
+
+  function deleteWorkout(id) {
+    setWorkoutHistory((prev) => prev.filter((w) => w.id !== id));
+    setWorkoutDetail(null);
+  }
+
+  function handlePurchasePro() {
+    setPro({ owned: true });
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics({ ...cosmetics, activePack: id });
+  }
+
+  const cadence = computeCadence(workoutHistory);
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🏋️</span> Ironlog
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Ironlog Pro">
+            {pro.owned ? "⭐" : "👑"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">
+            💾
+          </button>
+        </div>
+      </header>
+
+      {activeWorkout ? (
+        <ActiveWorkoutScreen
+          activeWorkout={activeWorkout}
+          workoutHistory={workoutHistory}
+          onLogSet={addSetToActiveWorkout}
+          onAddExercise={openAddPicker}
+          onFinish={finishActiveWorkout}
+          onCancel={cancelActiveWorkout}
+        />
+      ) : (
+        <>
+          <div className="tab-bar">
+            <button className={`tab-btn ${tab === "workouts" ? "active" : ""}`} onClick={() => setTab("workouts")}>Workouts</button>
+            <button className={`tab-btn ${tab === "exercises" ? "active" : ""}`} onClick={() => setTab("exercises")}>Exercises</button>
+          </div>
+
+          {tab === "workouts" ? (
+            workoutHistory.length === 0 ? (
+              <EmptyState onStart={openStartPicker} />
+            ) : (
+              <div className="main-list">
+                <p className="stats-row">🗓 {cadence.week} workout{cadence.week === 1 ? "" : "s"} this week · {cadence.month} this month</p>
+                {workoutHistory.map((w) => (
+                  <WorkoutHistoryCard key={w.id} workout={w} onTap={setWorkoutDetail} />
+                ))}
+              </div>
+            )
+          ) : (
+            <div className="main-list">
+              {groupByCategory(exercises).map((group) => (
+                <div key={group.category} className="picker-group">
+                  <div className="picker-group-label">{group.category}</div>
+                  {group.items.map((ex) => (
+                    <ExerciseListRow key={ex.id} exercise={ex} workoutHistory={workoutHistory} onTap={setExerciseHistoryTarget} />
+                  ))}
+                </div>
+              ))}
+              <p className="free-tier-note">
+                {pro.owned ? "Unlimited custom exercises unlocked." : `Custom exercises: ${customCount} of ${MAX_FREE_CUSTOM_EXERCISES} used.`}
+              </p>
+              <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={() => setCustomModalOpen(true)}>
+                + Add custom exercise
+              </button>
+            </div>
+          )}
+
+          {tab === "workouts" && workoutHistory.length > 0 && (
+            <div className="fab">
+              <button onClick={openStartPicker}>+ Start workout</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {pickerOpen && (
+        <ExercisePickerModal
+          exercises={exercises}
+          excludeIds={pickerMode === "add" && activeWorkout ? activeWorkout.exercises.map((e) => e.exerciseId) : []}
+          mode={pickerMode}
+          onConfirm={handlePickerConfirm}
+          onCreateCustom={createCustomExercise}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+
+      {customModalOpen && (
+        <div className="modal-overlay" onClick={() => setCustomModalOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <h2>New custom exercise</h2>
+            <CustomExerciseForm onCreate={handleCreateCustomFromTab} onCancel={() => setCustomModalOpen(false)} />
+          </div>
+        </div>
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal
+          pro={pro}
+          cosmetics={cosmetics}
+          onPurchase={handlePurchasePro}
+          onSelectPack={handleSelectPack}
+          onClose={() => setUpgradeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+
+      {workoutDetail && (
+        <WorkoutDetailModal workout={workoutDetail} onClose={() => setWorkoutDetail(null)} onDelete={deleteWorkout} />
+      )}
+
+      {exerciseHistoryTarget && (
+        <ExerciseHistoryModal
+          exercise={exerciseHistoryTarget}
+          workoutHistory={workoutHistory}
+          onClose={() => setExerciseHistoryTarget(null)}
+        />
+      )}
+
+      {showConfetti && <Confetti />}
+
+      {prBanner && <div className="milestone-banner pr-banner">{prBanner}</div>}
+      {finishToast && <div className="milestone-banner finish-banner">✓ {finishToast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before the
+  // Notification API works at all. Silently no-ops over file:// or http,
+  // since both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

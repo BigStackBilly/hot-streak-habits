@@ -595,8 +595,30 @@ function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
   const [bestFlags, setBestFlags] = useState({ score: false, tile: false });
   const alreadyOverOnMount = useRef(state.gameOver);
 
+  // stateRef mirrors `state` for useMoveEngine's getTiles() to read from,
+  // and is the ACTUAL source of truth applyPhase1/applySettled read from
+  // and write to — NOT React's functional setState updater. Earlier this
+  // used `setState((s) => { const next = {...}; stateRef.current = next;
+  // return next; })`, on the assumption the updater runs synchronously
+  // with the setState() call. It doesn't: React only guarantees updaters
+  // run before the next render, which for an update queued from a
+  // setTimeout callback (as the move engine's settle step is) can be
+  // deferred a tick. The move engine resets its "animating" guard and
+  // calls applySettled in that same synchronous tick, so a swipe/keypress
+  // landing in the deferred window could call getTiles() before the
+  // updater — and therefore stateRef.current — had actually run, read the
+  // stale pre-settle board (missing the tile that just spawned), and
+  // compute a move against it, corrupting the board with two different
+  // tiles landing on the same cell. Computing `next` from stateRef.current
+  // directly and assigning the ref BEFORE calling setState (passing the
+  // already-computed object, not a function) makes the ref update happen
+  // in the exact same synchronous statement as the animating-guard reset,
+  // with zero dependency on when React gets around to rendering.
   const stateRef = useRef(state);
   useEffect(() => {
+    // Safety net for any setState call that doesn't sync the ref itself
+    // below (there shouldn't be any that matter for getTiles(), but this
+    // keeps the ref from permanently drifting if one is ever added).
     stateRef.current = state;
   }, [state]);
   useEffect(() => {
@@ -605,10 +627,14 @@ function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
 
   const getTiles = useCallback(() => stateRef.current.tiles, []);
   const applyPhase1 = useCallback((phase1) => {
-    setState((s) => ({ ...s, tiles: phase1 }));
+    const next = { ...stateRef.current, tiles: phase1 };
+    stateRef.current = next;
+    setState(next);
   }, []);
   const applySettled = useCallback(({ tiles, scoreGain }) => {
-    setState((s) => ({ ...s, tiles, score: s.score + scoreGain, gameOver: isGameOver(tiles) }));
+    const next = { ...stateRef.current, tiles, score: stateRef.current.score + scoreGain, gameOver: isGameOver(tiles) };
+    stateRef.current = next;
+    setState(next);
   }, []);
 
   const move = useMoveEngine({
@@ -621,17 +647,22 @@ function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
   });
   useArrowKeys(move, !state.gameOver);
 
-  // Safety net: normally gameOver is only computed right after a move
-  // settles (see applySettled above). But a board can also arrive
-  // already-stuck without going through a move here — e.g. resuming a
-  // save from a previous session, or a board edited directly in
-  // localStorage for testing — so re-check on every tiles change too.
+  // Mount-only safety net: normally gameOver is computed right after a
+  // move settles (see applySettled above), which is correct because it
+  // only ever runs against the final, settled board. But a board can also
+  // arrive already-stuck without going through a move here — e.g.
+  // resuming a save from a previous session, or a board edited directly
+  // in localStorage for testing — so check once on mount too.
+  // Deliberately NOT a `[state.tiles, state.gameOver]` effect: that would
+  // also fire on the transient phase1 update mid-move (both halves of an
+  // in-flight merge briefly share one cell there), and could flag
+  // gameOver against that inconsistent, not-yet-settled board.
   useEffect(() => {
-    if (state.gameOver) return;
-    if (isGameOver(state.tiles)) {
+    if (!state.gameOver && isGameOver(state.tiles)) {
       setState((s) => ({ ...s, gameOver: true }));
     }
-  }, [state.tiles, state.gameOver]);
+    // eslint-disable-next-line
+  }, []);
 
   useEffect(() => {
     if (!state.gameOver) return;
@@ -654,7 +685,9 @@ function EndlessScreen({ bestScore, bestTile, activePack, onUpdateBest }) {
   }, [state.gameOver]);
 
   function newGame() {
-    setState(startFreshEndless(makeId));
+    const fresh = startFreshEndless(makeId);
+    stateRef.current = fresh; // keep in lockstep — see stateRef comment above
+    setState(fresh);
     setShowGameOver(false);
     setBestFlags({ score: false, tile: false });
     alreadyOverOnMount.current = false;
@@ -809,8 +842,18 @@ function DailyScreen({ history, activePack, onFinishToday }) {
   const rngRef = useRef(null);
   if (!rngRef.current) rngRef.current = makeRng(state.rngState);
 
+  // See the matching comment in EndlessScreen: applyPhase1/applySettled
+  // compute the next state from stateRef.current directly and write the
+  // ref BEFORE calling setState (passing an already-built object, not a
+  // function) — relying on React's functional-updater form to run
+  // synchronously with setState() doesn't hold for updates queued from a
+  // setTimeout (the move engine's settle step), and a swipe/keypress
+  // landing in that deferred window could otherwise read a pre-settle
+  // board via getTiles() and corrupt it with two tiles on one cell.
   const stateRef = useRef(state);
   useEffect(() => {
+    // Safety net for any setState call that doesn't sync the ref itself
+    // (e.g. finalize() below) — harmless since those don't race a move.
     stateRef.current = state;
   }, [state]);
   useEffect(() => {
@@ -819,16 +862,31 @@ function DailyScreen({ history, activePack, onFinishToday }) {
 
   const getTiles = useCallback(() => stateRef.current.tiles, []);
   const applyPhase1 = useCallback((phase1) => {
-    setState((s) => ({ ...s, tiles: phase1 }));
+    const next = { ...stateRef.current, tiles: phase1 };
+    stateRef.current = next;
+    setState(next);
   }, []);
   const applySettled = useCallback(({ tiles, scoreGain }) => {
-    setState((s) => ({
-      ...s,
+    const next = {
+      ...stateRef.current,
       tiles,
-      score: s.score + scoreGain,
-      moves: s.moves + 1,
+      score: stateRef.current.score + scoreGain,
+      moves: stateRef.current.moves + 1,
       rngState: rngRef.current.getState(),
-    }));
+    };
+    stateRef.current = next;
+    setState(next);
+    // Game-over must only ever be judged against a fully SETTLED board,
+    // never the transient `phase1` array (which deliberately puts both
+    // halves of an in-flight merge on the same cell for the slide
+    // animation, and hasn't dropped consumed tiles or added the new spawn
+    // yet). Checking here — right when `tiles` is the real, final board —
+    // is what fixes a real bug: a generic `useEffect` watching every
+    // `state.tiles` change used to also fire on the phase1 update and
+    // could call finalize() against that inconsistent mid-animation data,
+    // locking in a corrupted "done" result (confirmed via playtesting: a
+    // saved Daily result with two different tiles occupying one cell).
+    if (isGameOver(tiles)) finalize(false);
   }, []);
 
   const move = useMoveEngine({
@@ -842,21 +900,40 @@ function DailyScreen({ history, activePack, onFinishToday }) {
   useArrowKeys(move, state.status === "in-progress");
 
   function finalize(endedEarly) {
-    setState((s) => {
-      if (s.status === "done") return s;
-      const result = { date: s.date, tile: maxTileValue(s.tiles), moves: s.moves, score: s.score, endedEarly: !!endedEarly };
-      const finished = { ...s, status: "done", result };
-      saveJSON(KEYS.dailyState, finished);
-      onFinishToday(result);
-      return finished;
-    });
+    // Reads/writes stateRef.current directly (our synchronous source of
+    // truth — see the comment above) instead of a setState functional
+    // updater. The original code called onFinishToday(result) — which
+    // triggers setHistory/setDailyPreview on the PARENT App component —
+    // from INSIDE the updater passed to this component's own setState.
+    // That's a real bug: calling another component's setState while
+    // React is invoking this component's updater violates React's
+    // render-purity rules and throws "Cannot update a component while
+    // rendering a different component" (confirmed live via the console
+    // once applySettled started calling finalize() synchronously).
+    // Building `finished`/`result` from stateRef.current up front and
+    // calling onFinishToday as a separate, top-level statement after
+    // setState avoids nesting a cross-component update inside an updater.
+    const s = stateRef.current;
+    if (s.status === "done") return;
+    const result = { date: s.date, tile: maxTileValue(s.tiles), moves: s.moves, score: s.score, endedEarly: !!endedEarly };
+    const finished = { ...s, status: "done", result };
+    stateRef.current = finished;
+    saveJSON(KEYS.dailyState, finished);
+    setState(finished);
+    onFinishToday(result);
   }
 
+  // Mount-only safety net: a resumed save (page reload mid-day) could in
+  // principle already be stuck with no legal moves left. Deliberately NOT
+  // a `[state.tiles, state.status]` effect — the normal in-play path is
+  // covered by the isGameOver check inside applySettled above, which only
+  // ever runs against a fully settled board; re-running this on every
+  // tiles change would also fire on the transient phase1 update mid-move
+  // and could finalize() against an inconsistent, not-yet-settled board.
   useEffect(() => {
-    if (state.status !== "in-progress") return;
-    if (isGameOver(state.tiles)) finalize(false);
+    if (state.status === "in-progress" && isGameOver(state.tiles)) finalize(false);
     // eslint-disable-next-line
-  }, [state.tiles, state.status]);
+  }, []);
 
   if (state.status === "done") {
     return <DailyResultView result={state.result} history={history} />;
