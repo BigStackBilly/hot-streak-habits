@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Pageturn</title>
+<meta name="theme-color" content="#7a2039" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this family uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pageturn" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// PAGETURN — a small local-first reading tracker
+//
+// Sibling app to Hot Streak Habits / Thirsty Leaves / etc, same house
+// style: this lives inline in index.html (rather than a separate app.js)
+// so the app can be opened directly as a file:// URL with zero
+// server/build step — the in-browser Babel transformer can't fetch a
+// separate local script file over file://, but it can transform a
+// script that's already inline.
+//
+// The core loop is deliberately NOT streak-shaped: unlike the habit
+// tracker family, reading doesn't happen every single day for most
+// people, and punishing gaps would just teach people to stop opening
+// the app (same principle already applied in spendlog/ironlog/thirsty-
+// leaves). Instead there's a "days with a reading session logged"
+// LIFETIME COUNT — it only ever goes up, there's nothing to lose.
+//
+// Organized top to bottom as:
+//   1. Date helpers         - turning JS Dates into stable "YYYY-MM-DD" keys
+//   2. Reading math          - pure functions: progress %, stats, no React
+//   3. localStorage helpers  - load/save books, sessions, theme, cosmetics, pro
+//   4. Small presentational components (EmptyState, ProgressBar, Confetti, Stars)
+//   5. BookCard               - one currently-reading book's card
+//   5b. FinishedBookRow       - one row in the finished shelf
+//   6. BookModal               - the bottom-sheet form for creating/editing a book
+//   6b. LogProgressModal       - fast page-number entry / quick-add
+//   6c. FinishModal            - the congratulatory "you finished it" moment
+//   6d. ProModal                - accent color themes + extended stats (stub paywall)
+//   6e. StatsModal              - pages today/week, books finished, days logged
+//   6f. BackupModal             - export/import everything to a local JSON file
+//   7. App                     - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const BOOKS_KEY = "pageturn.books.v1";
+const SESSIONS_KEY = "pageturn.sessions.v1";
+const THEME_KEY = "pageturn.theme.v1";
+const COSMETICS_KEY = "pageturn.cosmetics.v1";
+const PRO_KEY = "pageturn.pro.v1";
+const PRO_PRICE = "$2.99";
+
+const EMOJI_CHOICES = [
+  "📕", "📗", "📘", "📙", "📓", "📔",
+  "📖", "📚", "🔖", "✒️", "🖋️", "📝",
+  "📰", "📜", "🎓", "🧠", "💭", "☕",
+  "🕯️", "🍂", "🍁", "🧶", "🪶", "🌙",
+];
+
+// Cosmetic accent-color packs. "burgundy" is the free default; the rest
+// are paid re-skins of the same --accent-1/--accent-2 gradient variables
+// (see [data-pack="..."] rules in styles.css) — no logic changes, just
+// color. Mirrors the sibling apps' THEME_PACKS/SKY_PACKS pattern exactly,
+// bundled behind one Pro purchase instead of per-pack pricing.
+const ACCENT_PACKS = [
+  { id: "burgundy", name: "Burgundy", free: true, colors: ["#7a2039", "#b0455f"] },
+  { id: "forest", name: "Forest", colors: ["#20492f", "#4a8f68"] },
+  { id: "amber", name: "Amber", colors: ["#a3651c", "#e0a545"] },
+  { id: "ink", name: "Ink", colors: ["#23345c", "#5170a8"] },
+];
+
+const STAR_LABELS = ["", "Not for me", "It was okay", "Liked it", "Really liked it", "Loved it"];
+
+// ---------------------------------------------------------------------
+// 1. DATE HELPERS
+//
+// We store dates as "YYYY-MM-DD" strings in the user's LOCAL timezone.
+// Deliberately not `date.toISOString()` anywhere — that converts to UTC
+// first, which can silently roll a late-evening reading session over to
+// the wrong calendar day for anyone west of Greenwich.
+// ---------------------------------------------------------------------
+
+function toDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function todayKey() {
+  return toDateKey(new Date());
+}
+
+function keyPlusDays(key, delta) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + delta);
+  return toDateKey(date);
+}
+
+function daysBetween(keyA, keyB) {
+  const [ay, am, ad] = keyA.split("-").map(Number);
+  const [by, bm, bd] = keyB.split("-").map(Number);
+  const a = Date.UTC(ay, am - 1, ad);
+  const b = Date.UTC(by, bm - 1, bd);
+  return Math.round((b - a) / 86400000);
+}
+
+function formatDateLabel(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function monthKeyOf(dateKey) {
+  return dateKey.slice(0, 7); // "YYYY-MM"
+}
+
+function monthLabelOf(monthKey) {
+  const [y, m] = monthKey.split("-").map(Number);
+  const date = new Date(y, m - 1, 1);
+  return date.toLocaleDateString(undefined, { month: "short" });
+}
+
+// ---------------------------------------------------------------------
+// 2. READING MATH
+//
+// A book's progress is always DERIVED from currentPage/totalPages, never
+// stored as its own percentage — same "one source of truth" philosophy
+// as every sibling app's streak math, just applied to pages instead of
+// dates. Stats are derived from the `sessions` log, which is the only
+// record of *when* pages were actually read.
+// ---------------------------------------------------------------------
+
+function getProgress(book) {
+  const total = Math.max(0, Number(book.totalPages) || 0);
+  const current = Math.max(0, Math.min(Number(book.currentPage) || 0, total || Number(book.currentPage) || 0));
+  const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+  const pagesLeft = Math.max(0, total - current);
+  const isComplete = total > 0 && current >= total;
+  return { pct, pagesLeft, isComplete, current, total };
+}
+
+function pagesInRange(sessions, startKey, endKey) {
+  return sessions
+    .filter((s) => s.date >= startKey && s.date <= endKey)
+    .reduce((sum, s) => sum + s.pages, 0);
+}
+
+function pagesOnDate(sessions, key) {
+  return sessions.filter((s) => s.date === key).reduce((sum, s) => sum + s.pages, 0);
+}
+
+function daysLoggedCount(sessions) {
+  return new Set(sessions.map((s) => s.date)).size;
+}
+
+function booksFinishedThisYear(books) {
+  const year = todayKey().slice(0, 4);
+  return books.filter((b) => b.status === "finished" && b.finishedAt && b.finishedAt.slice(0, 4) === year).length;
+}
+
+// Last `count` months (including the current one), oldest first, each
+// with the total pages logged that month — the data behind the Pro
+// "pages per month" chart.
+function monthlyPages(sessions, count) {
+  const months = [];
+  const today = new Date();
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    months.push(key);
+  }
+  return months.map((key) => ({
+    monthKey: key,
+    label: monthLabelOf(key),
+    pages: sessions.filter((s) => monthKeyOf(s.date) === key).reduce((sum, s) => sum + s.pages, 0),
+  }));
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadBooks() {
+  try {
+    const raw = localStorage.getItem(BOOKS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBooks(books) {
+  localStorage.setItem(BOOKS_KEY, JSON.stringify(books));
+}
+
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions) {
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { purchased: ["burgundy"], activePack: "burgundy" };
+}
+
+function saveCosmetics(cosmetics) {
+  localStorage.setItem(COSMETICS_KEY, JSON.stringify(cosmetics));
+}
+
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function savePro(pro) {
+  localStorage.setItem(PRO_KEY, JSON.stringify(pro));
+}
+
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A quiet little "page flip" chime played when progress is logged.
+function playPageFlip() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.07].forEach((startAt, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "triangle";
+      osc.frequency.value = 660 + i * 220;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.15);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.16);
+    });
+  } catch {
+    // Web Audio isn't available (or blocked until a user gesture) — fine,
+    // the visual feedback still lands.
+  }
+}
+
+// A short celebratory chime for finishing a whole book — a bit longer and
+// brighter than the page-flip sound, since this is the bigger moment.
+function playFinishChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.12, 0.24].forEach((startAt, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 523 + i * 130;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.3);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.32);
+    });
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function EmptyState({ onAdd }) {
+  return (
+    <div className="empty-state">
+      <div className="emoji">📖</div>
+      <h2>No books yet</h2>
+      <p>Add what you're reading, log pages as you go, and watch the shelf fill up.</p>
+      <button className="btn btn-primary" style={{ padding: "14px 28px" }} onClick={onAdd}>
+        + Add your first book
+      </button>
+    </div>
+  );
+}
+
+function ProgressBar({ pct, complete }) {
+  return (
+    <div className="progress-track">
+      <div className={`progress-fill ${complete ? "complete" : ""}`} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+// Tappable 1-5 star rating. `value` of 0 means "no rating yet".
+function StarRating({ value, onChange }) {
+  return (
+    <div className="star-row" role="radiogroup" aria-label="Rating">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          className={`star-btn ${n <= value ? "filled" : ""}`}
+          onClick={() => onChange(n === value ? 0 : n)}
+          aria-label={`${n} star${n === 1 ? "" : "s"}`}
+        >
+          {n <= value ? "★" : "☆"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StaticStars({ value }) {
+  if (!value) return null;
+  return (
+    <span className="static-stars" aria-label={`${value} out of 5 stars`}>
+      {"★".repeat(value)}
+      <span className="static-stars-empty">{"★".repeat(5 - value)}</span>
+    </span>
+  );
+}
+
+// A short burst of falling colored rectangles, purely CSS-driven.
+function Confetti() {
+  const colors = ["#7a2039", "#b0455f", "#e0a545", "#f6ead9", "#4a8f68"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.left}%`,
+            background: p.color,
+            animationDelay: `${p.delay}s`,
+            animationDuration: `${p.duration}s`,
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. BOOK CARD — one currently-reading book
+// ---------------------------------------------------------------------
+
+function BookCard({ book, onLogProgress, onFinishNow, onEdit }) {
+  const progress = getProgress(book);
+
+  return (
+    <div className={`book-card ${progress.isComplete ? "book-complete" : ""}`}>
+      <div className="book-top-row">
+        <button className="book-tap-area" onClick={() => onEdit(book)}>
+          <div className="book-emoji-ring">
+            <span className="book-emoji">{book.emoji}</span>
+          </div>
+          <div className="book-info">
+            <div className="book-title-row">
+              <span className="book-title">{book.title}</span>
+            </div>
+            {book.author && <span className="book-author">{book.author}</span>}
+            <span className="book-page-count">
+              {progress.current} / {progress.total || "?"} pages · {progress.pct}%
+            </span>
+          </div>
+        </button>
+      </div>
+
+      <ProgressBar pct={progress.pct} complete={progress.isComplete} />
+
+      {progress.isComplete ? (
+        <button className="btn btn-primary finish-cta" onClick={() => onFinishNow(book)}>
+          🎉 Mark as finished
+        </button>
+      ) : (
+        <button className="btn btn-primary log-btn" onClick={() => onLogProgress(book)}>
+          📖 Log progress
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5b. FINISHED BOOK ROW
+// ---------------------------------------------------------------------
+
+function FinishedBookRow({ book, onDelete }) {
+  return (
+    <div className="finished-row">
+      <div className="finished-emoji">{book.emoji}</div>
+      <div className="finished-info">
+        <div className="finished-title-row">
+          <span className="finished-title">{book.title}</span>
+          <StaticStars value={book.rating} />
+        </div>
+        {book.author && <span className="finished-author">{book.author}</span>}
+        <span className="finished-date">Finished {formatDateLabel(book.finishedAt)} · {book.totalPages} pages</span>
+        {book.note && <p className="finished-note">"{book.note}"</p>}
+      </div>
+      <button className="icon-btn" onClick={() => onDelete(book.id)} aria-label="Delete book">🗑️</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. BOOK MODAL — create/edit a book
+// ---------------------------------------------------------------------
+
+function BookModal({ book, onSave, onDelete, onClose }) {
+  const isEditing = Boolean(book);
+  const [title, setTitle] = useState(book ? book.title : "");
+  const [author, setAuthor] = useState(book ? book.author || "" : "");
+  const [emoji, setEmoji] = useState(book ? book.emoji : EMOJI_CHOICES[0]);
+  const [totalPages, setTotalPages] = useState(book ? String(book.totalPages) : "");
+  const [startPage, setStartPage] = useState(book ? String(book.currentPage) : "0");
+
+  const totalNum = Number(totalPages) || 0;
+  const canSave = title.trim().length > 0 && totalNum > 0;
+
+  function handleSave() {
+    if (!canSave) return;
+    if (isEditing) {
+      const cappedCurrent = Math.min(book.currentPage, totalNum);
+      onSave({ ...book, title: title.trim(), author: author.trim(), emoji, totalPages: totalNum, currentPage: cappedCurrent });
+    } else {
+      const startNum = Math.max(0, Math.min(Number(startPage) || 0, totalNum));
+      onSave({
+        id: makeId(),
+        title: title.trim(),
+        author: author.trim(),
+        emoji,
+        totalPages: totalNum,
+        currentPage: startNum,
+        status: "reading",
+        createdAt: todayKey(),
+        finishedAt: null,
+        note: "",
+        rating: 0,
+      });
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{isEditing ? "Edit book" : "New book"}</h2>
+
+        <label className="field-label" htmlFor="book-title">Title</label>
+        <input
+          id="book-title"
+          className="name-input"
+          placeholder="e.g. The Left Hand of Darkness"
+          value={title}
+          maxLength={120}
+          autoFocus
+          onChange={(e) => setTitle(e.target.value)}
+        />
+
+        <label className="field-label" htmlFor="book-author">Author <span className="field-optional">(optional)</span></label>
+        <input
+          id="book-author"
+          className="name-input"
+          placeholder="e.g. Ursula K. Le Guin"
+          value={author}
+          maxLength={80}
+          onChange={(e) => setAuthor(e.target.value)}
+        />
+
+        <label className="field-label">Cover</label>
+        <div className="emoji-grid">
+          {EMOJI_CHOICES.map((e) => (
+            <button
+              key={e}
+              type="button"
+              className={`emoji-option ${emoji === e ? "selected" : ""}`}
+              onClick={() => setEmoji(e)}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
+
+        <label className="field-label" htmlFor="book-pages">Total pages</label>
+        <input
+          id="book-pages"
+          className="name-input"
+          type="number"
+          inputMode="numeric"
+          min="1"
+          placeholder="e.g. 320"
+          value={totalPages}
+          onChange={(e) => setTotalPages(e.target.value)}
+        />
+
+        {!isEditing && (
+          <>
+            <label className="field-label" htmlFor="book-start">
+              Already read <span className="field-optional">(optional — if you're partway in)</span>
+            </label>
+            <input
+              id="book-start"
+              className="name-input"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="0"
+              value={startPage}
+              onChange={(e) => setStartPage(e.target.value)}
+            />
+          </>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!canSave} onClick={handleSave}>
+            {isEditing ? "Save" : "Add book"}
+          </button>
+        </div>
+
+        {isEditing && (
+          <button
+            className="btn-danger"
+            style={{ width: "100%", marginTop: 10 }}
+            onClick={() => onDelete(book.id)}
+          >
+            Delete book
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6b. LOG PROGRESS MODAL — fast numeric entry + quick-add chips
+// ---------------------------------------------------------------------
+
+const QUICK_ADD_CHOICES = [5, 10, 25, 50];
+
+function LogProgressModal({ book, onSave, onClose }) {
+  const [pageValue, setPageValue] = useState(String(book.currentPage));
+  const total = book.totalPages;
+  const numericValue = Math.max(0, Number(pageValue) || 0);
+  const cappedPreview = Math.min(numericValue, total);
+  const previewPct = total > 0 ? Math.round((cappedPreview / total) * 100) : 0;
+  const canSave = pageValue !== "" && numericValue >= 0;
+
+  function addPages(n) {
+    const next = Math.min(numericValue + n, total);
+    setPageValue(String(next));
+  }
+
+  function handleSave() {
+    if (!canSave) return;
+    onSave(book, cappedPreview);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>{book.emoji} {book.title}</h2>
+        <p className="log-current-line">Currently at page {book.currentPage} of {total}</p>
+
+        <label className="field-label" htmlFor="log-page">Update to page</label>
+        <input
+          id="log-page"
+          className="name-input page-number-input"
+          type="number"
+          inputMode="numeric"
+          min="0"
+          max={total}
+          value={pageValue}
+          autoFocus
+          onChange={(e) => setPageValue(e.target.value)}
+        />
+
+        <div className="preset-row">
+          {QUICK_ADD_CHOICES.map((n) => (
+            <button key={n} type="button" className="preset-chip" onClick={() => addPages(n)}>
+              +{n} pages
+            </button>
+          ))}
+        </div>
+
+        <ProgressBar pct={previewPct} complete={cappedPreview >= total} />
+        <p className="log-preview-line">{cappedPreview} / {total} pages · {previewPct}%</p>
+
+        <div className="modal-buttons" style={{ marginTop: 16 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!canSave} onClick={handleSave}>
+            Save progress
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6c. FINISH MODAL — the congratulatory moment, only for real completions
+//
+// Only ever shown when a book's currentPage has actually reached its
+// totalPages (or the reader explicitly taps "Mark as finished" once it
+// has) — never a fake/automatic celebration for partial progress.
+// ---------------------------------------------------------------------
+
+function FinishModal({ book, onConfirm, onCancel }) {
+  const [rating, setRating] = useState(book.rating || 0);
+  const [note, setNote] = useState(book.note || "");
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="finish-header">
+          <span className="finish-emoji">🎉</span>
+          <h2>You finished it!</h2>
+          <p className="finish-title-line">{book.emoji} {book.title}</p>
+        </div>
+
+        <label className="field-label">Rating <span className="field-optional">(optional)</span></label>
+        <StarRating value={rating} onChange={setRating} />
+        {rating > 0 && <p className="star-label">{STAR_LABELS[rating]}</p>}
+
+        <label className="field-label" htmlFor="finish-note" style={{ marginTop: 14 }}>
+          One-line note <span className="field-optional">(optional)</span>
+        </label>
+        <input
+          id="finish-note"
+          className="name-input"
+          placeholder="e.g. Slow start, incredible ending"
+          value={note}
+          maxLength={140}
+          onChange={(e) => setNote(e.target.value)}
+        />
+
+        <div className="modal-buttons-column" style={{ marginTop: 6 }}>
+          <button className="btn btn-primary" onClick={() => onConfirm(book, rating, note.trim())}>
+            Finish book
+          </button>
+          <button className="btn btn-secondary" onClick={onCancel}>Not yet</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6d. PRO MODAL — accent color themes + extended stats (stub paywall)
+//
+// "Buying" Pro right now only sets a local flag and unlocks the non-free
+// accent packs plus the extended stats chart — there's no real payment
+// processor wired in yet, which the footer note is upfront about, same
+// pattern as every sibling app's Upgrade/Theme modal.
+// ---------------------------------------------------------------------
+
+function ProModal({ pro, cosmetics, onPurchase, onSelectPack, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Pageturn Pro</h2>
+
+        <p className="upgrade-copy">
+          Pageturn is fully free to use — unlimited books, full progress tracking, backup, all
+          included. Pro is just a couple of extras for anyone who wants them:
+        </p>
+        <ul className="upgrade-list">
+          <li>3 extra accent color themes</li>
+          <li>Extended stats — a pages-per-month chart, not just totals</li>
+          <li>One-time unlock, no subscription</li>
+        </ul>
+
+        <label className="field-label">Accent color</label>
+        <div className="theme-grid">
+          {ACCENT_PACKS.map((pack) => {
+            const owned = pack.free || pro.owned;
+            const active = cosmetics.activePack === pack.id;
+            return (
+              <button
+                key={pack.id}
+                className={`theme-option ${active ? "selected" : ""}`}
+                onClick={() => (owned ? onSelectPack(pack.id) : onPurchase())}
+              >
+                <span
+                  className="theme-swatch"
+                  style={{ background: `linear-gradient(135deg, ${pack.colors[0]}, ${pack.colors[1]})` }}
+                />
+                <span className="theme-name">{pack.name}</span>
+                <span className="theme-status">
+                  {active ? "Active" : owned ? "Owned" : "Pro"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {!pro.owned && (
+          <button className="btn btn-primary" style={{ width: "100%", marginTop: 14 }} onClick={onPurchase}>
+            Unlock Pro — {PRO_PRICE}
+          </button>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 16 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6e. STATS MODAL — pages today/week, books finished, days logged
+//
+// Free tier shows basic totals only. The pages-per-month chart is the
+// one thing gated behind Pro (see ProModal) — everything about actually
+// tracking your reading stays free.
+// ---------------------------------------------------------------------
+
+function StatsModal({ books, sessions, pro, onOpenPro, onClose }) {
+  const today = todayKey();
+  const weekAgo = keyPlusDays(today, -6);
+  const pagesToday = pagesOnDate(sessions, today);
+  const pagesThisWeek = pagesInRange(sessions, weekAgo, today);
+  const finishedThisYear = booksFinishedThisYear(books);
+  const daysLogged = daysLoggedCount(sessions);
+  const months = monthlyPages(sessions, 6);
+  const maxMonthly = Math.max(1, ...months.map((m) => m.pages));
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Your reading stats</h2>
+
+        <div className="stats-grid">
+          <div className="stat-tile">
+            <span className="stat-number">{pagesToday}</span>
+            <span className="stat-label">Pages today</span>
+          </div>
+          <div className="stat-tile">
+            <span className="stat-number">{pagesThisWeek}</span>
+            <span className="stat-label">Pages this week</span>
+          </div>
+          <div className="stat-tile">
+            <span className="stat-number">{finishedThisYear}</span>
+            <span className="stat-label">Books finished this year</span>
+          </div>
+          <div className="stat-tile">
+            <span className="stat-number">{daysLogged}</span>
+            <span className="stat-label">Days with a session logged</span>
+          </div>
+        </div>
+        <p className="stats-footnote">
+          That last one is a lifetime count, not a streak — it never resets for a gap. Read when it
+          works for you.
+        </p>
+
+        <label className="field-label" style={{ marginTop: 20 }}>Pages per month</label>
+        {pro.owned ? (
+          <div className="chart-row">
+            {months.map((m) => (
+              <div key={m.monthKey} className="chart-col">
+                <div className="chart-bar-track">
+                  <div
+                    className="chart-bar"
+                    style={{ height: `${Math.max(4, Math.round((m.pages / maxMonthly) * 100))}%` }}
+                  />
+                </div>
+                <span className="chart-label">{m.label}</span>
+                <span className="chart-value">{m.pages}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="chart-locked" onClick={onOpenPro}>
+            <div className="chart-row chart-row-blurred">
+              {months.map((m) => (
+                <div key={m.monthKey} className="chart-col">
+                  <div className="chart-bar-track">
+                    <div className="chart-bar" style={{ height: `${Math.max(4, Math.round((m.pages / maxMonthly) * 100))}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="chart-lock-overlay">
+              <span>🔒 Unlock Pro for the monthly chart</span>
+            </div>
+          </div>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6f. BACKUP MODAL — export/import everything to a local JSON file
+//
+// Deliberately NOT gated behind Pro: losing every book and reading
+// history because a phone was lost or reinstalled is a real trust
+// problem, and locking someone's own data recovery behind a paywall
+// would be predatory. Fully local — reads/writes localStorage directly
+// and triggers a normal browser file download/upload, no network calls.
+// Gathers every "pageturn."-prefixed key by prefix rather than a
+// hardcoded list, so a future new key is automatically included.
+// ---------------------------------------------------------------------
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("pageturn.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const payload = { app: "pageturn", exportedAt: new Date().toISOString(), data: collectBackupData() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pageturn-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+
+      if (!parsed || parsed.app !== "pageturn" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Pageturn backup file." });
+        return;
+      }
+
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+
+      Object.keys(parsed.data).forEach((key) => {
+        localStorage.setItem(key, parsed.data[key]);
+      });
+      window.location.reload();
+    };
+    reader.onerror = () => {
+      setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+
+        <p className="upgrade-copy">
+          Save every book, page of progress, and finished-shelf history to a file on your device —
+          and bring it all back later, even after reinstalling or switching phones.
+        </p>
+
+        <label className="field-label">Download</label>
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ width: "100%", marginBottom: 18 }}
+          onClick={handleDownload}
+        >
+          ⬇ Download backup
+        </button>
+
+        <label className="field-label">Restore</label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ width: "100%" }}
+          onClick={handleRestoreClick}
+        >
+          ⬆ Restore from backup
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="backup-file-input"
+          onChange={handleFileChange}
+        />
+
+        {status && (
+          <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>
+            {status.text}
+          </p>
+        )}
+
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+
+        <p className="theme-note">
+          Free, always — this is your data, not a premium feature. Nothing leaves your device.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [books, setBooks] = useState(loadBooks);
+  const [sessions, setSessions] = useState(loadSessions);
+  const [theme, setTheme] = useState(loadTheme);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [pro, setPro] = useState(loadPro);
+
+  const [bookModalState, setBookModalState] = useState({ open: false, book: null });
+  const [logTarget, setLogTarget] = useState(null); // book
+  const [finishTarget, setFinishTarget] = useState(null); // book
+  const [proModalOpen, setProModalOpen] = useState(false);
+  const [statsModalOpen, setStatsModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [justFinished, setJustFinished] = useState(null); // { title } for banner/confetti
+
+  useEffect(() => {
+    saveBooks(books);
+  }, [books]);
+
+  useEffect(() => {
+    saveSessions(sessions);
+  }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    saveCosmetics(cosmetics);
+    if (cosmetics.activePack && cosmetics.activePack !== "burgundy") {
+      document.documentElement.setAttribute("data-pack", cosmetics.activePack);
+    } else {
+      document.documentElement.removeAttribute("data-pack");
+    }
+  }, [cosmetics]);
+
+  useEffect(() => {
+    savePro(pro);
+  }, [pro]);
+
+  function openAddModal() {
+    setBookModalState({ open: true, book: null });
+  }
+
+  function openEditModal(book) {
+    setBookModalState({ open: true, book });
+  }
+
+  function closeBookModal() {
+    setBookModalState({ open: false, book: null });
+  }
+
+  function handleSaveBook(book) {
+    setBooks((prev) => {
+      const exists = prev.some((b) => b.id === book.id);
+      return exists ? prev.map((b) => (b.id === book.id ? book : b)) : [...prev, book];
+    });
+    closeBookModal();
+  }
+
+  function handleDeleteBook(id) {
+    setBooks((prev) => prev.filter((b) => b.id !== id));
+    setSessions((prev) => prev.filter((s) => s.bookId !== id));
+    closeBookModal();
+  }
+
+  // The single entry point for logging progress. Computes the updated
+  // book and (optionally) a new session entry up front, then fires each
+  // state update as its own top-level statement — never nesting a call
+  // to a sibling setState inside another setState's updater function.
+  function handleSaveProgress(book, newPage) {
+    const today = todayKey();
+    const cappedPage = Math.max(0, Math.min(newPage, book.totalPages));
+    const delta = Math.max(0, cappedPage - book.currentPage);
+    const updatedBook = { ...book, currentPage: cappedPage };
+
+    setBooks((prev) => prev.map((b) => (b.id === book.id ? updatedBook : b)));
+
+    if (delta > 0) {
+      setSessions((prev) => [...prev, { id: makeId(), bookId: book.id, date: today, pages: delta }]);
+      playPageFlip();
+    }
+
+    setLogTarget(null);
+
+    if (updatedBook.totalPages > 0 && cappedPage >= updatedBook.totalPages) {
+      setFinishTarget(updatedBook);
+    }
+  }
+
+  function handleConfirmFinish(book, rating, note) {
+    const finishedBook = { ...book, status: "finished", finishedAt: todayKey(), rating, note };
+    setBooks((prev) => prev.map((b) => (b.id === book.id ? finishedBook : b)));
+    setFinishTarget(null);
+    playFinishChime();
+    setJustFinished({ title: book.title });
+    setTimeout(() => setJustFinished((cur) => (cur && cur.title === book.title ? null : cur)), 3200);
+  }
+
+  function handlePurchasePro() {
+    setPro({ owned: true });
+    setCosmetics((prev) => ({ ...prev, purchased: ACCENT_PACKS.map((p) => p.id) }));
+  }
+
+  function handleSelectPack(id) {
+    setCosmetics((prev) => ({ ...prev, activePack: id }));
+  }
+
+  const currentlyReading = books.filter((b) => b.status !== "finished");
+  const finished = [...books.filter((b) => b.status === "finished")].sort((a, b) =>
+    (b.finishedAt || "").localeCompare(a.finishedAt || "")
+  );
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">📖</span> Pageturn
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setStatsModalOpen(true)} aria-label="Reading stats">
+            📊
+          </button>
+          <button className="theme-toggle" onClick={() => setProModalOpen(true)} aria-label="Pageturn Pro">
+            {pro.owned ? "⭐" : "👑"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">
+            💾
+          </button>
+        </div>
+      </header>
+
+      {books.length === 0 ? (
+        <EmptyState onAdd={openAddModal} />
+      ) : (
+        <div className="book-list">
+          {currentlyReading.length > 0 ? (
+            <>
+              <p className="section-label">Currently reading</p>
+              {currentlyReading.map((book) => (
+                <BookCard
+                  key={book.id}
+                  book={book}
+                  onLogProgress={setLogTarget}
+                  onFinishNow={setFinishTarget}
+                  onEdit={openEditModal}
+                />
+              ))}
+            </>
+          ) : (
+            <p className="section-empty-note">Nothing on your currently-reading shelf — add a book below.</p>
+          )}
+
+          {finished.length > 0 && (
+            <>
+              <p className="section-label finished-section-label">Finished ({finished.length})</p>
+              {finished.map((book) => (
+                <FinishedBookRow key={book.id} book={book} onDelete={handleDeleteBook} />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="fab">
+        <button onClick={openAddModal}>+ Add book</button>
+      </div>
+
+      {bookModalState.open && (
+        <BookModal
+          book={bookModalState.book}
+          onSave={handleSaveBook}
+          onDelete={handleDeleteBook}
+          onClose={closeBookModal}
+        />
+      )}
+
+      {logTarget && (
+        <LogProgressModal book={logTarget} onSave={handleSaveProgress} onClose={() => setLogTarget(null)} />
+      )}
+
+      {finishTarget && (
+        <FinishModal
+          book={finishTarget}
+          onConfirm={handleConfirmFinish}
+          onCancel={() => setFinishTarget(null)}
+        />
+      )}
+
+      {proModalOpen && (
+        <ProModal
+          pro={pro}
+          cosmetics={cosmetics}
+          onPurchase={handlePurchasePro}
+          onSelectPack={handleSelectPack}
+          onClose={() => setProModalOpen(false)}
+        />
+      )}
+
+      {statsModalOpen && (
+        <StatsModal
+          books={books}
+          sessions={sessions}
+          pro={pro}
+          onOpenPro={() => {
+            setStatsModalOpen(false);
+            setProModalOpen(true);
+          }}
+          onClose={() => setStatsModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+
+      {justFinished && <Confetti />}
+
+      {justFinished && (
+        <div className="milestone-banner">🎉 Finished "{justFinished.title}"!</div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android/iOS. Silently no-ops over file:// or
+  // plain http, since both require a secure (https/localhost) context.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
