@@ -1,0 +1,33 @@
+name: Create IAP (Mood Star) — diagnostic
+
+# One-off diagnostic: attempts to create the "Mood Star Pro" In-App Purchase
+# product directly via the App Store Connect API, to find out whether IAP
+# creation is actually possible via API (unlike App record creation, which
+# is confirmed hard-blocked). Safe to re-run — it reuses the product if it
+# already exists rather than erroring.
+on:
+  workflow_dispatch:
+
+jobs:
+  create_iap:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/moodsky
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/moodsky/ios/App
+
+      - name: Attempt to create the Pro unlock IAP
+        working-directory: apps/moodsky/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bundle exec fastlane create_iap

@@ -169,4 +169,83 @@ platform :ios do
       },
     )
   end
+
+  # Diagnostic/first-attempt lane: unlike App creation (confirmed hard-blocked
+  # by the API earlier — "the resource 'apps' does not allow 'CREATE'"),
+  # Apple's In-App Purchase creation is a *different* API surface
+  # (InAppPurchaseV2, added to App Store Connect API separately from the
+  # legacy Apps resource) that may not carry the same restriction. This lane
+  # tries the full create -> localize -> price flow for one Non-Consumable
+  # product and reports exactly where it succeeds or fails, rather than
+  # assuming either way.
+  desc "Attempt to create the Pro unlock In-App Purchase via the API (diagnostic)"
+  lane :create_iap do
+    app_identifier = "com.Niloc.moodsky"
+    product_id = "com.Niloc.moodsky.pro"
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
+
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    UI.message("Found app: #{app.id}")
+
+    iap = nil
+    begin
+      existing = app.get_in_app_purchases_v2.find { |i| i.product_id == product_id }
+      if existing
+        UI.message("IAP #{product_id} already exists (id=#{existing.id}), reusing it")
+        iap = existing
+      else
+        iap = Spaceship::ConnectAPI::InAppPurchaseV2.create(
+          app_id: app.id,
+          attributes: {
+            name: "Mood Star Pro",
+            productId: product_id,
+            inAppPurchaseType: "NON_CONSUMABLE",
+            reviewNote: "Unlocks full mood history/stats view and extra star palettes/sky themes. No account, no server — this only flips a local flag.",
+            familySharable: false,
+          },
+        )
+        UI.message("SUCCESS: created InAppPurchaseV2 id=#{iap.id}")
+      end
+    rescue => e
+      UI.error("FAILED at InAppPurchaseV2.create: #{e.class} — #{e.message}")
+    end
+
+    if iap
+      begin
+        iap.create_in_app_purchase_localization(
+          attributes: {
+            locale: "en-US",
+            name: "Mood Star Pro",
+            description: "Unlock your full mood history and stats, plus extra star palettes and sky themes.",
+          },
+        )
+        UI.message("SUCCESS: created localization")
+      rescue => e
+        UI.error("FAILED at localization: #{e.class} — #{e.message}")
+      end
+
+      begin
+        price_points = iap.get_in_app_purchase_price_points(filter: { territory: "USA" })
+        target = price_points.find { |p| p.customer_price.to_f.between?(3.49, 4.49) }
+        if target
+          iap.create_in_app_purchase_price_schedule(
+            base_territory: "USA",
+            in_app_purchase_price_points: [target],
+          )
+          UI.message("SUCCESS: set price to #{target.customer_price}")
+        else
+          UI.message("No USA price point found near $3.99 — price points returned: #{price_points.map(&:customer_price).first(10)}")
+        end
+      rescue => e
+        UI.error("FAILED at pricing: #{e.class} — #{e.message}")
+      end
+    end
+  end
 end
