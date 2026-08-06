@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Pageturn</title>
+<title>Pageturnerz</title>
 <meta name="theme-color" content="#7a2039" />
 
 <!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
@@ -18,7 +18,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Pageturn" />
+<meta name="apple-mobile-web-app-title" content="Pageturnerz" />
 </head>
 <body>
 
@@ -721,10 +721,10 @@ function ProModal({ pro, cosmetics, onPurchase, onSelectPack, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Pageturn Pro</h2>
+        <h2>Pageturnerz Pro</h2>
 
         <p className="upgrade-copy">
-          Pageturn is fully free to use — unlimited books, full progress tracking, backup, all
+          Pageturnerz is fully free to use — unlimited books, full progress tracking, backup, all
           included. Pro is just a couple of extras for anyone who wants them:
         </p>
         <ul className="upgrade-list">
@@ -925,7 +925,7 @@ function BackupModal({ onClose }) {
       }
 
       if (!parsed || parsed.app !== "pageturn" || typeof parsed.data !== "object" || parsed.data === null) {
-        setStatus({ type: "error", text: "That doesn't look like a Pageturn backup file." });
+        setStatus({ type: "error", text: "That doesn't look like a Pageturnerz backup file." });
         return;
       }
 
@@ -1120,13 +1120,13 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <span className="logo">📖</span> Pageturn
+          <span className="logo">📖</span> Pageturnerz
         </h1>
         <div className="header-buttons">
           <button className="theme-toggle" onClick={() => setStatsModalOpen(true)} aria-label="Reading stats">
             📊
           </button>
-          <button className="theme-toggle" onClick={() => setProModalOpen(true)} aria-label="Pageturn Pro">
+          <button className="theme-toggle" onClick={() => setProModalOpen(true)} aria-label="Pageturnerz Pro">
             {pro.owned ? "⭐" : "👑"}
           </button>
           <button

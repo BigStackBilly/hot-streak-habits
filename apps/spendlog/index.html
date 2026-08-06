@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Spendlog</title>
+<title>TapSpend</title>
 <meta name="theme-color" content="#f4f7f1" />
 
 <!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
@@ -19,7 +19,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Spendlog" />
+<meta name="apple-mobile-web-app-title" content="TapSpend" />
 </head>
 <body>
 
@@ -588,7 +588,7 @@ function ShopModal({ isPro, categories, onPurchase, onDeleteCategory, onExportCS
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Spendlog Pro</h2>
+        <h2>TapSpend Pro</h2>
         <ul className="feature-list">
           <li>Unlimited custom categories — your own icon, label &amp; color</li>
           <li>Export every entry to a real CSV file, any time</li>
@@ -728,7 +728,7 @@ function BackupModal({ onClose }) {
         return;
       }
       if (!parsed || parsed.app !== "spendlog" || typeof parsed.data !== "object" || parsed.data === null) {
-        setError("That file doesn't look like a Spendlog backup.");
+        setError("That file doesn't look like a TapSpend backup.");
         return;
       }
       if (!window.confirm("This will replace everything currently on this device. Continue?")) {
@@ -870,10 +870,10 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title"><span className="coin-logo">🪙</span> Spendlog</h1>
+        <h1 className="app-title"><span className="coin-logo">🪙</span> TapSpend</h1>
         <div className="header-buttons">
           <button className="theme-toggle" onClick={() => setSettingsOpen(true)} aria-label="Settings">⚙️</button>
-          <button className="theme-toggle" onClick={() => setShopOpen(true)} aria-label="Spendlog Pro">💎</button>
+          <button className="theme-toggle" onClick={() => setShopOpen(true)} aria-label="TapSpend Pro">💎</button>
           <button className="theme-toggle" onClick={() => setBackupOpen(true)} aria-label="Backup & Restore">💾</button>
           <button
             className="theme-toggle"

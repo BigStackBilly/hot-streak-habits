@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Ironlog</title>
+<title>Gains Log</title>
 <meta name="theme-color" content="#15171b" />
 
 <!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Ironlog" />
+<meta name="apple-mobile-web-app-title" content="Gains Log" />
 </head>
 <body>
 
@@ -980,7 +980,7 @@ function UpgradeModal({ pro, cosmetics, onPurchase, onSelectPack, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Ironlog Pro</h2>
+        <h2>Gains Log Pro</h2>
 
         {pro.owned ? (
           <p className="upgrade-copy">✓ Pro is unlocked on this device — thanks for the support. Unlimited custom exercises, and every accent pack below is unlocked.</p>
@@ -1090,7 +1090,7 @@ function BackupModal({ onClose }) {
       }
 
       if (!parsed || parsed.app !== "ironlog" || typeof parsed.data !== "object" || parsed.data === null) {
-        setStatus({ type: "error", text: "That doesn't look like an Ironlog backup file." });
+        setStatus({ type: "error", text: "That doesn't look like an Gains Log backup file." });
         return;
       }
 
@@ -1371,10 +1371,10 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <span className="logo">🏋️</span> Ironlog
+          <span className="logo">🏋️</span> Gains Log
         </h1>
         <div className="header-buttons">
-          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Ironlog Pro">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Gains Log Pro">
             {pro.owned ? "⭐" : "👑"}
           </button>
           <button

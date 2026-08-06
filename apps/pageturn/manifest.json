@@ -1,6 +1,6 @@
 {
-  "name": "Pageturn",
-  "short_name": "Pageturn",
+  "name": "Pageturnerz",
+  "short_name": "Pageturnerz",
   "description": "A reading tracker: log books, track pages, and build a simple reading habit without guilt-tripping over gaps.",
   "start_url": "./index.html",
   "scope": "./",

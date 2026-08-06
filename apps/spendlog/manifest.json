@@ -1,6 +1,6 @@
 {
-  "name": "Spendlog",
-  "short_name": "Spendlog",
+  "name": "TapSpend",
+  "short_name": "TapSpend",
   "description": "A dead-simple personal expense logger — log a purchase in under 10 seconds, no bank linking, no login, everything stays on your device.",
   "start_url": "./index.html",
   "scope": "./",

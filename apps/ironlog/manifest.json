@@ -1,6 +1,6 @@
 {
-  "name": "Ironlog",
-  "short_name": "Ironlog",
+  "name": "Gains Log",
+  "short_name": "Gains Log",
   "description": "A strength-training workout log — sets, reps, and weight per exercise, with honest personal-record tracking.",
   "start_url": "./index.html",
   "scope": "./",

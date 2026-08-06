@@ -1,6 +1,6 @@
 {
-  "name": "Tally",
-  "short_name": "Tally",
+  "name": "Tall-ow",
+  "short_name": "Tall-ow",
   "description": "A fast bill-splitting and tip-calculating utility — no login, no backend, just a calculator with a bit of memory.",
   "start_url": "./index.html",
   "scope": "./",

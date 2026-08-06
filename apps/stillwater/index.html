@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Stillwater</title>
+<title>Stillwaterz</title>
 <meta name="theme-color" content="#07131a" />
 
 <!-- Fonts: same pair convention as sibling apps (a rounded display face for
@@ -21,7 +21,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Stillwater" />
+<meta name="apple-mobile-web-app-title" content="Stillwaterz" />
 </head>
 <body>
 
@@ -661,7 +661,7 @@ function ShopModal({ cosmetics, onPurchase, onSelectSound, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Stillwater extras</h2>
+        <h2>Stillwaterz extras</h2>
 
         <h3 className="shop-subheading">Extra breathing patterns</h3>
         <div className="shop-grid">
@@ -771,7 +771,7 @@ function BackupModal({ onClose }) {
         return;
       }
       if (!parsed || parsed.app !== "stillwater" || typeof parsed.data !== "object" || parsed.data === null) {
-        setError("That file doesn't look like a Stillwater backup.");
+        setError("That file doesn't look like a Stillwaterz backup.");
         return;
       }
       if (!window.confirm("This will replace everything currently on this device. Continue?")) {
@@ -846,7 +846,7 @@ function HomeScreen({
   return (
     <div className="screen home-screen">
       <header className="home-header">
-        <h1 className="app-title">Stillwater</h1>
+        <h1 className="app-title">Stillwaterz</h1>
         <p className="app-subtitle">A quiet place to slow your breathing down.</p>
       </header>
 

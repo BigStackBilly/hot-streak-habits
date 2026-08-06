@@ -1,6 +1,6 @@
 {
-  "name": "Workflo",
-  "short_name": "Workflo",
+  "name": "Workflowstack",
+  "short_name": "Workflowstack",
   "description": "A Pomodoro-style deep-work timer with structured breaks and an honest focus-time log — no login, no backend.",
   "start_url": "./index.html",
   "scope": "./",
