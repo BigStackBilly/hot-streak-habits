@@ -208,8 +208,12 @@ function round2(n) {
 // and each set is { weight, reps, isPR }. `isPR` is computed and frozen
 // onto the set the moment it's logged (see App.addSetToActiveWorkout) by
 // comparing against every previously SAVED workout — never the in-progress
-// one — so it's an honest record of "this beat everything before it",
-// and never needs recomputing later.
+// one — so it's an honest record of "this beat everything before it at the
+// time it was logged". That snapshot goes stale if a workout is later
+// deleted (the record it held needs to pass to whoever's next-best) or if
+// history is loaded from an older/imported file, so recomputeAllPRs()
+// below rebuilds every isPR flag from scratch on load and after a delete —
+// see its comment for why.
 // ---------------------------------------------------------------------
 
 // Heaviest weight ever logged for `exerciseId` at exactly `reps` reps,
@@ -267,6 +271,41 @@ function getExerciseStats(history, exerciseId) {
   return { sessions, prRows, bestSet, totalWorkouts: sessions.length };
 }
 
+// Rebuilds every set's isPR flag from scratch, replaying history oldest to
+// newest and applying the exact same rule used live in
+// App.addSetToActiveWorkout ("beats every prior SAVED set at this rep
+// count"). isPR is normally frozen at log time and never touched again —
+// but that snapshot goes stale the moment a workout is deleted: the
+// aggregate "best" stats (getExerciseStats et al) recompute fine because
+// they scan live workoutHistory on every render, but the frozen per-set
+// badge does NOT, so the honest new record-holder never picks up the
+// trophy the deleted workout used to hold. Call this any time
+// workoutHistory is mutated in a way that could change past PR standings
+// (currently: deleting a workout, and loading history from disk/backup, in
+// case an older build or an imported file left stale flags behind).
+// Builds entirely new set/exercise/workout objects rather than mutating in
+// place, so it's safe to use as (or inside) a setState updater.
+function recomputeAllPRs(history) {
+  const chronological = [...history].sort((a, b) => a.finishedAt - b.finishedAt);
+  const bestByKey = {}; // `${exerciseId}::${reps}` -> best weight so far
+  const rebuiltById = {};
+  for (const workout of chronological) {
+    const exercises = workout.exercises.map((ex) => {
+      const sets = ex.sets.map((set) => {
+        const key = `${ex.exerciseId}::${set.reps}`;
+        const bestPrior = bestByKey[key] || 0;
+        const isPR = bestPrior > 0 && set.weight > bestPrior;
+        if (set.weight > bestPrior) bestByKey[key] = set.weight;
+        return { ...set, isPR };
+      });
+      return { ...ex, sets };
+    });
+    rebuiltById[workout.id] = { ...workout, exercises };
+  }
+  // Preserve the original (newest-first) order — only the isPR flags change.
+  return history.map((w) => rebuiltById[w.id]);
+}
+
 function computeSetVolume(set) {
   return set.weight * set.reps;
 }
@@ -314,7 +353,8 @@ function saveExercises(exercises) {
 function loadWorkoutHistory() {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return recomputeAllPRs(parsed);
   } catch {
     return [];
   }
@@ -1235,12 +1275,19 @@ function App() {
     setPickerOpen(false);
   }
 
-  // The single entry point for logging a set. Reads `activeWorkout` and
-  // `workoutHistory` straight from this render's closure (both are
-  // App's own top-level state, always current), computes the PR flag,
-  // then calls setActiveWorkout with an already-built plain object — not
-  // a functional updater — so there's no updater body that could ever
-  // reach into another component's setState.
+  // The single entry point for logging a set. Reads `workoutHistory`
+  // straight from this render's closure to compute the PR flag (that's
+  // App's own top-level state and doesn't change mid-workout, so it's
+  // always current). The actual set-append goes through a FUNCTIONAL
+  // updater — reading `prev` instead of the closed-over `activeWorkout` —
+  // whose body is pure and calls nothing else, still honoring the file's
+  // no-nested-setState rule. That matters because "Log set"/"Same as last"
+  // can fire more than once inside the same React batch (fast repeat taps,
+  // or a slow re-render on an older device): with the old plain-object
+  // form, two calls sharing one stale `activeWorkout` snapshot meant the
+  // second setActiveWorkout silently clobbered the first, and a logged set
+  // just vanished with no error. The functional form makes every call
+  // build on top of whatever the previous one just wrote, so none get lost.
   function addSetToActiveWorkout(exerciseId, weight, reps) {
     if (!activeWorkout) return;
     const bestPrior = getBestWeightForReps(workoutHistory, exerciseId, reps);
@@ -1248,10 +1295,14 @@ function App() {
     const newSet = { weight, reps, isPR };
 
     const targetExercise = activeWorkout.exercises.find((ex) => ex.exerciseId === exerciseId);
-    const updatedExercises = activeWorkout.exercises.map((ex) =>
-      ex.exerciseId === exerciseId ? { ...ex, sets: [...ex.sets, newSet] } : ex
-    );
-    setActiveWorkout({ ...activeWorkout, exercises: updatedExercises });
+
+    setActiveWorkout((prev) => {
+      if (!prev) return prev;
+      const updatedExercises = prev.exercises.map((ex) =>
+        ex.exerciseId === exerciseId ? { ...ex, sets: [...ex.sets, newSet] } : ex
+      );
+      return { ...prev, exercises: updatedExercises };
+    });
 
     playSetLogged();
     if (isPR && targetExercise) {
@@ -1296,8 +1347,13 @@ function App() {
     setTimeout(() => setFinishToast(null), 2600);
   }
 
+  // Functional updater with a pure body (filter + recomputeAllPRs, no other
+  // setState/prop calls) — after removing a workout, every remaining set's
+  // isPR flag is rebuilt from scratch so a PR that workout held correctly
+  // passes to whichever set is now the honest best, instead of leaving the
+  // trophy badge stuck on nothing.
   function deleteWorkout(id) {
-    setWorkoutHistory((prev) => prev.filter((w) => w.id !== id));
+    setWorkoutHistory((prev) => recomputeAllPRs(prev.filter((w) => w.id !== id)));
     setWorkoutDetail(null);
   }
 

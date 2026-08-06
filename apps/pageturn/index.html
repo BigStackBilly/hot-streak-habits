@@ -437,6 +437,12 @@ function BookCard({ book, onLogProgress, onFinishNow, onEdit }) {
 // ---------------------------------------------------------------------
 
 function FinishedBookRow({ book, onDelete }) {
+  function handleDelete() {
+    if (window.confirm(`Delete "${book.title}"? This can't be undone — its rating, note, and reading history will be lost too.`)) {
+      onDelete(book.id);
+    }
+  }
+
   return (
     <div className="finished-row">
       <div className="finished-emoji">{book.emoji}</div>
@@ -449,7 +455,7 @@ function FinishedBookRow({ book, onDelete }) {
         <span className="finished-date">Finished {formatDateLabel(book.finishedAt)} · {book.totalPages} pages</span>
         {book.note && <p className="finished-note">"{book.note}"</p>}
       </div>
-      <button className="icon-btn" onClick={() => onDelete(book.id)} aria-label="Delete book">🗑️</button>
+      <button className="icon-btn" onClick={handleDelete} aria-label="Delete book">🗑️</button>
     </div>
   );
 }
@@ -468,6 +474,12 @@ function BookModal({ book, onSave, onDelete, onClose }) {
 
   const totalNum = Number(totalPages) || 0;
   const canSave = title.trim().length > 0 && totalNum > 0;
+
+  function handleDelete() {
+    if (window.confirm(`Delete "${book.title}"? This can't be undone — its logged reading progress will be lost too.`)) {
+      onDelete(book.id);
+    }
+  }
 
   function handleSave() {
     if (!canSave) return;
@@ -573,7 +585,7 @@ function BookModal({ book, onSave, onDelete, onClose }) {
           <button
             className="btn-danger"
             style={{ width: "100%", marginTop: 10 }}
-            onClick={() => onDelete(book.id)}
+            onClick={handleDelete}
           >
             Delete book
           </button>
