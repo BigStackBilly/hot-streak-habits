@@ -1,0 +1,13 @@
+Tally-ow splits any bill and calculates the tip live as you type. Enter the subtotal on a big keypad, pick a tip percentage (or set your own), choose how many people are splitting it, and watch the total and per-person amount update instantly.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- The entire calculator stays free, always — no paywall on the core tool
+- Round-up option so nobody has to deal with odd cents
+- Dark mode and light mode, your choice
+
+A handful of optional keypad color themes and saved-split history are available if you want them — entirely optional, never required. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Split it, tip it, done.

@@ -1,0 +1,13 @@
+WorkFlowStack is a classic Pomodoro-style focus timer — 25 minutes on, 5 off, a longer break every fourth round — paired with an honest log of the hours you actually spent focused.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- A plain, honest hours-logged record — no gamified trees, no streaks to protect
+- Configurable work/break lengths if the classic 25/5 isn't your pace
+- Dark mode and light mode, your choice
+
+A handful of optional cosmetic timer-ring themes and a longer history view are available if you want them — entirely optional, never required. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Start your next focus block.

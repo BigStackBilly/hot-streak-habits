@@ -1,0 +1,13 @@
+Gains Log tracks sets, reps, and weight per lift, with automatic personal-record detection that's honest about ties — no inflated PRs.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Automatic PR detection built in from the start, never paywalled
+- A full exercise library, plus room to add your own
+- Dark mode by default, matching a gym-ready aesthetic
+
+Unlimited custom exercises and full unbounded history are available as an optional unlock if you want them — entirely optional, never required. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Log the set. See the gains.

@@ -1,0 +1,1 @@
+Sets, reps, and weight per lift, with an honest personal-record flag that never fudges a tie.

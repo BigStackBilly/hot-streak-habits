@@ -1,0 +1,1 @@
+https://deploy-pageturn.vercel.app/privacy.html

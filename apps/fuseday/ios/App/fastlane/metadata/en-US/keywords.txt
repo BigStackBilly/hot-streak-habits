@@ -1,0 +1,1 @@
+puzzle game,daily puzzle,2048,tile game,brain game,number puzzle

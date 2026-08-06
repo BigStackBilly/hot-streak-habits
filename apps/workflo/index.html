@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Workflowstack</title>
+<title>WorkFlowStack</title>
 <meta name="theme-color" content="#0c0d13" />
 
 <!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Workflowstack" />
+<meta name="apple-mobile-web-app-title" content="WorkFlowStack" />
 </head>
 <body>
 
@@ -50,7 +50,7 @@
 //   3. Audio/haptics         - the phase-transition chime + vibration
 //   4. Small components      - StatTile, WeekChart, SessionGroup
 //   5. SettingsModal          - work/break/long-break/cycle durations
-//   6. ShopModal               - cosmetic ring packs + Workflowstack Pro unlock
+//   6. ShopModal               - cosmetic ring packs + WorkFlowStack Pro unlock
 //   7. HistoryModal              - session log + (Pro) weekly chart
 //   8. BackupModal                 - free local export/import
 //   9. App                          - timer state machine + layout
@@ -237,7 +237,7 @@ function StatTile({ num, label }) {
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 // A simple 7-bar weekly chart: total focused minutes per day of the
-// current week (Mon-Sun), Workflowstack Pro only.
+// current week (Mon-Sun), WorkFlowStack Pro only.
 function WeekChart({ log }) {
   const monday = weekStartKey(todayKey());
   const mondayDate = new Date(monday + "T00:00:00");
@@ -387,7 +387,7 @@ function SettingsModal({ settings, onSave, onClose }) {
 }
 
 // ---------------------------------------------------------------------
-// 6. SHOP MODAL — cosmetic ring packs + Workflowstack Pro history unlock
+// 6. SHOP MODAL — cosmetic ring packs + WorkFlowStack Pro history unlock
 //
 // "Buying" a pack or the history unlock right now only flips local
 // flags — there's no real payment processor wired in yet, which the
@@ -400,7 +400,7 @@ function ShopModal({ cosmetics, onPurchasePack, onSelectPack, onPurchaseHistory,
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Workflowstack Pro</h2>
+        <h2>WorkFlowStack Pro</h2>
 
         <h3>Ring &amp; accent themes</h3>
         <div className="theme-grid">
@@ -517,7 +517,7 @@ function HistoryModal({ log, cosmetics, onOpenShop, onClose }) {
 
         {hasOlderHistory && (
           <button className="history-upsell" onClick={onOpenShop}>
-            You have older sessions not shown here. <strong>Unlock full history</strong> with Workflowstack Pro.
+            You have older sessions not shown here. <strong>Unlock full history</strong> with WorkFlowStack Pro.
           </button>
         )}
 
@@ -587,7 +587,7 @@ function BackupModal({ onClose }) {
         return;
       }
       if (!parsed || parsed.app !== "workflo" || typeof parsed.data !== "object" || parsed.data === null) {
-        setError("That file doesn't look like a Workflowstack backup.");
+        setError("That file doesn't look like a WorkFlowStack backup.");
         return;
       }
       if (!window.confirm("This will replace everything currently on this device. Continue?")) {
@@ -827,7 +827,7 @@ function App() {
       <header className="app-header">
         <h1 className="app-title">
           <span className="ring-mark" style={{ background: `conic-gradient(var(--accent-1) ${pct}%, var(--surface-2) 0)` }} />
-          Workflowstack
+          WorkFlowStack
         </h1>
         <div className="header-actions">
           <button className="icon-btn" aria-label="Toggle theme" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
@@ -835,7 +835,7 @@ function App() {
           </button>
           <button className="icon-btn" aria-label="Focus history" onClick={() => setHistoryOpen(true)}>📊</button>
           <button className="icon-btn" aria-label="Backup and restore" onClick={() => setBackupOpen(true)}>💾</button>
-          <button className="icon-btn" aria-label="Workflowstack Pro shop" onClick={handleOpenShop}>
+          <button className="icon-btn" aria-label="WorkFlowStack Pro shop" onClick={handleOpenShop}>
             🎨
             {!cosmetics.shopViewed && <span className="shop-dot" />}
           </button>

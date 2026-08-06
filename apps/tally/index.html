@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Tall-ow</title>
+<title>Tally-ow</title>
 <meta name="theme-color" content="#05060a" />
 
 <!-- Fonts: same pair as the sibling apps (Baloo 2 for chunky numbers/headings,
@@ -18,7 +18,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Tall-ow" />
+<meta name="apple-mobile-web-app-title" content="Tally-ow" />
 </head>
 <body>
 
@@ -70,7 +70,7 @@ const CURRENCIES = ["$", "€", "£", "¥", "₹"]; // $ € £ ¥ ₹
 // default; the rest are paid re-skins of the same --accent-1/--accent-2
 // gradient variables (see [data-pack="..."] rules in styles.css) — no
 // logic changes, just different numbers. Unlike the sibling apps, all
-// three paid packs unlock together behind one "Tall-ow Pro" purchase (see
+// three paid packs unlock together behind one "Tally-ow Pro" purchase (see
 // ThemeModal below) rather than being bought individually, since the
 // product brief bundles cosmetics + unlimited history into one unlock.
 const KEYPAD_PACKS = [
@@ -354,12 +354,12 @@ function SaveSplitModal({ split, currency, tipPercent, roundUp, atCap, onSave, o
         <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
           <h2>Free history is full</h2>
           <p className="modal-subtitle">
-            The free plan keeps your last {HISTORY_FREE_CAP} saved splits. Unlock Tall-ow Pro for unlimited history, or
+            The free plan keeps your last {HISTORY_FREE_CAP} saved splits. Unlock Tally-ow Pro for unlimited history, or
             delete an old one from your history list to make room.
           </p>
           <div className="modal-buttons">
             <button className="btn btn-secondary" onClick={onClose}>Not now</button>
-            <button className="btn btn-primary" onClick={onOpenShop}>See Tall-ow Pro</button>
+            <button className="btn btn-primary" onClick={onOpenShop}>See Tally-ow Pro</button>
           </div>
         </div>
       </div>
@@ -455,7 +455,7 @@ function ThemeModal({ cosmetics, onSelectPack, onUnlockPro, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-        <h2>Tall-ow Pro</h2>
+        <h2>Tally-ow Pro</h2>
         <div className="theme-grid">
           {KEYPAD_PACKS.map((pack) => {
             const locked = !pack.free && !cosmetics.proOwned;
@@ -478,7 +478,7 @@ function ThemeModal({ cosmetics, onSelectPack, onUnlockPro, onClose }) {
         </div>
 
         <div className="pro-callout">
-          <p className="pro-callout-title">{cosmetics.proOwned ? "You have Tall-ow Pro" : "Unlock Tall-ow Pro — $2.99"}</p>
+          <p className="pro-callout-title">{cosmetics.proOwned ? "You have Tally-ow Pro" : "Unlock Tally-ow Pro — $2.99"}</p>
           <ul className="pro-callout-list">
             <li>3 extra keypad accent colors</li>
             <li>Unlimited saved splits (free plan keeps the last {HISTORY_FREE_CAP})</li>
@@ -562,7 +562,7 @@ function BackupModal({ onClose }) {
         return;
       }
       if (!parsed || parsed.app !== "tally" || typeof parsed.data !== "object" || parsed.data === null) {
-        setError("That file doesn't look like a Tall-ow backup.");
+        setError("That file doesn't look like a Tally-ow backup.");
         return;
       }
       if (!window.confirm("This will replace everything currently on this device. Continue?")) {
@@ -742,7 +742,7 @@ function App() {
       <header className="app-header">
         <h1 className="app-title">
           <span className={`receipt-icon ${isPaidPack ? `pack-${activePackObj.id}` : ""}`}>{"\u{1F9FE}"}</span>
-          Tall-ow
+          Tally-ow
         </h1>
         <div className="header-buttons">
           <button className="theme-toggle" onClick={cycleCurrency} aria-label="Change currency">
@@ -751,7 +751,7 @@ function App() {
           <button className="theme-toggle" onClick={() => setHistoryModalOpen(true)} aria-label="Saved splits">
             {"\u{1F4CB}"}
           </button>
-          <button className="theme-toggle" onClick={openThemeModal} aria-label="Tall-ow Pro">
+          <button className="theme-toggle" onClick={openThemeModal} aria-label="Tally-ow Pro">
             {"\u{1F3A8}"}
             {!cosmetics.shopViewed && <span className="unread-dot" aria-hidden="true" />}
           </button>
