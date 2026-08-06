@@ -1,0 +1,15 @@
+{
+  "name": "Wordday",
+  "short_name": "Wordday",
+  "description": "A five-letter word puzzle, once a day — the same word for everyone, plus unlimited free practice.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbfaf7",
+  "theme_color": "#4f9d69",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

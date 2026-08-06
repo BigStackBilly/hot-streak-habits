@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#4f9d69" />
+<title>Wordday</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// ---------------------------------------------------------------------
+// 1. WORD LIST — one list used both as valid guesses and possible
+//    answers, kept to common, everyday 5-letter words. The daily word is
+//    picked deterministically from today's date, so everyone playing on
+//    a given day (in their own local timezone) gets the same word —
+//    same "shared daily puzzle" idea Fuseday's Daily Challenge uses.
+// ---------------------------------------------------------------------
+
+const WORDS = [
+  "ABOUT","ABOVE","ADMIT","ADOPT","ADULT","AFTER","AGAIN","AGENT","AGREE","AHEAD",
+  "ALARM","ALBUM","ALERT","ALIEN","ALIGN","ALIKE","ALIVE","ALLOW","ALONE","ALONG",
+  "ALTER","AMONG","ANGEL","ANGER","ANGLE","ANGRY","APPLE","APPLY","ARENA","ARGUE",
+  "ARISE","ARROW","ASIDE","ASSET","AUDIO","AVOID","AWAKE","AWARD","AWARE","BADLY",
+  "BAKER","BASIC","BASIN","BASIS","BEACH","BEGIN","BELOW","BENCH","BERRY","BIRTH",
+  "BLACK","BLADE","BLAME","BLANK","BLAST","BLAZE","BLEND","BLESS","BLIND","BLOCK",
+  "BLOOD","BLOOM","BOARD","BOAST","BONUS","BOOST","BOUND","BRAIN","BRAND","BRAVE",
+  "BREAD","BREAK","BRICK","BRIDE","BRIEF","BRING","BROAD","BROOK","BROWN","BRUSH",
+  "BUILD","BUYER","CABIN","CANDY","CARGO","CARRY","CATCH","CAUSE","CHAIN","CHAIR",
+  "CHALK","CHARM","CHART","CHASE","CHEAP","CHECK","CHEEK","CHEER","CHESS","CHEST",
+  "CHIEF","CHILD","CHILL","CHOSE","CIVIC","CLAIM","CLASS","CLEAN","CLEAR","CLERK",
+  "CLICK","CLIFF","CLIMB","CLOCK","CLOSE","CLOTH","CLOUD","CLOWN","COACH","COAST",
+  "COLOR","CRAFT","CRASH","CRAZY","CREAM","CRIME","CROSS","CROWD","CROWN","CRUSH",
+  "CURVE","DAILY","DANCE","DEATH","DEBUT","DELAY","DEPTH","DIRTY","DOUBT","DOZEN",
+  "DRAFT","DRAIN","DRAMA","DRANK","DREAM","DRESS","DRIED","DRIFT","DRINK","DRIVE",
+  "DROVE","DRUNK","EAGER","EARLY","EARTH","EIGHT","ELDER","ELECT","EMPTY","ENEMY",
+  "ENJOY","ENTER","ENTRY","EQUAL","ERROR","EVENT","EVERY","EXACT","EXIST","EXTRA",
+  "FAITH","FALSE","FAULT","FIBER","FIELD","FIFTH","FIGHT","FINAL","FIRST","FIXED",
+  "FLAME","FLASH","FLEET","FLESH","FLOAT","FLOOD","FLOOR","FLOUR","FLUID","FOCUS",
+  "FORCE","FORTH","FORTY","FORUM","FOUND","FRAME","FRANK","FRESH","FRONT","FROST",
+  "FRUIT","FUNNY","GHOST","GIANT","GIVEN","GLASS","GLOBE","GLORY","GOOSE","GRACE",
+  "GRADE","GRAND","GRANT","GRAPE","GRAPH","GRASP","GRASS","GREAT","GREEN","GREET",
+  "GRIEF","GRILL","GROSS","GROUP","GROWN","GUARD","GUESS","GUEST","GUIDE","HAPPY",
+  "HARSH","HEART","HEAVY","HENCE","HONEY","HONOR","HORSE","HOTEL","HOUSE","HUMAN",
+  "HUMOR","HURRY","IDEAL","IMAGE","IMPLY","INDEX","INNER","INPUT","ISSUE","IVORY",
+  "JOINT","JUDGE","JUICE","JUMBO","KNIFE","KNOCK","KNOWN","LABEL","LARGE","LASER",
+  "LATER","LAUGH","LAYER","LEARN","LEAST","LEAVE","LEGAL","LEMON","LEVEL","LIGHT",
+  "LIMIT","LOGIC","LOOSE","LOWER","LOYAL","LUCKY","LUNCH","MAGIC","MAJOR","MAKER",
+  "MARCH","MATCH","MAYBE","MAYOR","MEDAL","MEDIA","MERIT","METAL","MIGHT","MINOR",
+  "MINUS","MIXED","MODEL","MONEY","MONTH","MORAL","MOTOR","MOUNT","MOUSE","MOUTH",
+  "MOVIE","MUSIC","NERVE","NEVER","NEWLY","NIGHT","NOISE","NORTH","NOVEL","NURSE",
+  "OCEAN","OFFER","OFTEN","ORDER","OTHER","OUGHT","OUTER","OWNER","PANEL","PANIC",
+  "PAPER","PARTY","PEACE","PHASE","PHONE","PHOTO","PIANO","PIECE","PILOT","PITCH",
+  "PIZZA","PLACE","PLAIN","PLANE","PLANT","PLATE","POINT","POUND","POWER","PRESS",
+  "PRICE","PRIDE","PRIME","PRINT","PRIOR","PRIZE","PROOF","PROUD","PROVE","QUEEN",
+  "QUERY","QUICK","QUIET","QUITE","RADIO","RAISE","RANGE","RAPID","RATIO","REACH",
+  "READY","REALM","REBEL","REFER","RELAX","REPLY","RIGHT","RIVAL","RIVER","ROBOT",
+  "ROUGH","ROUND","ROUTE","ROYAL","RURAL","SAUCE","SCALE","SCARE","SCENE","SCOPE",
+  "SCORE","SENSE","SERVE","SEVEN","SHADE","SHAKE","SHALL","SHAPE","SHARE","SHARP",
+  "SHEEP","SHEET","SHELF","SHELL","SHIFT","SHINE","SHIRT","SHOCK","SHOOT","SHORE",
+  "SHORT","SHOWN","SIGHT","SILLY","SIXTH","SKILL","SLEEP","SLICE","SLIDE","SMALL",
+  "SMART","SMELL","SMILE","SMOKE","SNAKE","SOLID","SOLVE","SORRY","SOUND","SOUTH",
+  "SPACE","SPARE","SPEAK","SPEED","SPELL","SPEND","SPENT","SPICE","SPLIT","SPOKE",
+  "SPORT","SQUAD","STAFF","STAGE","STAIR","STAKE","STAND","START","STATE","STEAM",
+  "STEEL","STEEP","STICK","STIFF","STILL","STOCK","STONE","STORE","STORM","STORY",
+  "STOVE","STRIP","STUDY","STUFF","STYLE","SUGAR","SUPER","SWEET","SWIFT","SWING",
+  "TABLE","TASTE","TEACH","THANK","THEFT","THEIR","THEME","THERE","THESE","THICK",
+  "THING","THINK","THIRD","THOSE","THREE","THREW","THROW","THUMB","TIGHT","TIRED",
+  "TITLE","TODAY","TOKEN","TOOTH","TOPIC","TOTAL","TOUCH","TOUGH","TOWER","TRACE",
+  "TRACK","TRADE","TRAIL","TRAIN","TREAT","TREND","TRIAL","TRIBE","TRICK","TRIED",
+  "TRUCK","TRULY","TRUNK","TRUST","TRUTH","TWICE","UNCLE","UNDER","UNION","UNITE",
+  "UNITY","UNTIL","UPPER","UPSET","URBAN","USAGE","USUAL","VALID","VALUE","VAPOR",
+  "VIDEO","VIRUS","VISIT","VITAL","VOCAL","VOICE","WASTE","WATCH","WATER","WHEAT",
+  "WHEEL","WHERE","WHICH","WHILE","WHITE","WHOLE","WHOSE","WOMAN","WORLD","WORRY",
+  "WORSE","WORST","WORTH","WOULD","WOUND","WRITE","WRONG","YIELD","YOUNG","YOUTH",
+];
+const WORD_SET = new Set(WORDS);
+
+// ---------------------------------------------------------------------
+// 2. STORAGE KEYS + HELPERS
+// ---------------------------------------------------------------------
+
+const STATS_KEY = "wordday.stats.v1";
+const HISTORY_KEY = "wordday.history.v1";
+const THEME_KEY = "wordday.theme.v1";
+const PRO_KEY = "wordday.pro.v1";
+const COSMETICS_KEY = "wordday.cosmetics.v1";
+const ENDLESS_KEY = "wordday.endless.v1";
+
+function todayKey() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Simple deterministic string hash (djb2-ish) — same date string always
+// maps to the same word list index, on every device, with no server.
+function hashString(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function dailyWord(dateKey) {
+  return WORDS[hashString(dateKey) % WORDS.length];
+}
+
+function randomWord(exclude) {
+  let word = WORDS[Math.floor(Math.random() * WORDS.length)];
+  let guard = 0;
+  while (word === exclude && guard < 20) {
+    word = WORDS[Math.floor(Math.random() * WORDS.length)];
+    guard++;
+  }
+  return word;
+}
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return fallback;
+}
+
+function saveJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function loadStats() {
+  return loadJSON(STATS_KEY, { played: 0, won: 0, currentStreak: 0, maxStreak: 0, distribution: [0, 0, 0, 0, 0, 0] });
+}
+
+function loadHistory() {
+  return loadJSON(HISTORY_KEY, {});
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+
+function loadCosmetics() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COSMETICS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { activePalette: "classic" };
+}
+
+// ---------------------------------------------------------------------
+// 3. GAME LOGIC
+// ---------------------------------------------------------------------
+
+// Standard two-pass Wordle evaluation — handles duplicate letters
+// correctly (e.g. guessing "ERROR" against answer "ROBOT" only marks as
+// many O's/R's present as actually remain in the answer).
+function evaluateGuess(guess, answer) {
+  const result = Array(5).fill("absent");
+  const answerArr = answer.split("");
+  const guessArr = guess.split("");
+
+  for (let i = 0; i < 5; i++) {
+    if (guessArr[i] === answerArr[i]) {
+      result[i] = "correct";
+      answerArr[i] = null;
+    }
+  }
+  for (let i = 0; i < 5; i++) {
+    if (result[i] === "correct") continue;
+    const idx = answerArr.indexOf(guessArr[i]);
+    if (idx !== -1) {
+      result[i] = "present";
+      answerArr[idx] = null;
+    }
+  }
+  return result;
+}
+
+function computeKeyStatuses(guesses, evaluations) {
+  const status = {};
+  const rank = { absent: 0, present: 1, correct: 2 };
+  guesses.forEach((guess, gi) => {
+    guess.split("").forEach((letter, li) => {
+      const s = evaluations[gi][li];
+      if (!status[letter] || rank[s] > rank[status[letter]]) status[letter] = s;
+    });
+  });
+  return status;
+}
+
+function shareText(guesses, evaluations, won, dateKey) {
+  const symbols = { correct: "🟩", present: "🟨", absent: "⬜" };
+  const grid = evaluations.map((row) => row.map((s) => symbols[s]).join("")).join("\n");
+  return `Wordday ${dateKey}\n${won ? guesses.length : "X"}/6\n\n${grid}`;
+}
+
+// ---------------------------------------------------------------------
+// 4. PALETTES (cosmetic tile-color themes — the Pro unlock)
+// ---------------------------------------------------------------------
+
+const PALETTES = [
+  { id: "classic", name: "Classic", free: true, correct: "#4f9d69", present: "#d9a441" },
+  { id: "ocean", name: "Ocean", price: "$3.99", correct: "#2f8fbf", present: "#4fc3c9" },
+  { id: "berry", name: "Berry", price: "$3.99", correct: "#c2477a", present: "#e08a3e" },
+  { id: "forest", name: "Forest", price: "$3.99", correct: "#3f7d4a", present: "#8a9e3f" },
+];
+
+// ---------------------------------------------------------------------
+// 5. BOARD + KEYBOARD
+// ---------------------------------------------------------------------
+
+function Tile({ letter, status, revealed, delay }) {
+  const cls = ["tile"];
+  if (letter) cls.push("filled");
+  if (revealed && status) cls.push(status);
+  return (
+    <div className={cls.join(" ")} style={revealed ? { transitionDelay: `${delay}ms`, animationDelay: `${delay}ms` } : undefined}>
+      {letter}
+    </div>
+  );
+}
+
+function Row({ guess, evaluation, isCurrent, isInvalid }) {
+  const letters = (guess || "").padEnd(5).split("");
+  return (
+    <div className={`row${isCurrent && isInvalid ? " shake" : ""}`}>
+      {letters.map((letter, i) => (
+        <Tile
+          key={i}
+          letter={letter.trim()}
+          status={evaluation ? evaluation[i] : null}
+          revealed={Boolean(evaluation)}
+          delay={i * 220}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Board({ guesses, evaluations, currentGuess, invalidShake }) {
+  const rows = [];
+  for (let i = 0; i < 6; i++) {
+    if (i < guesses.length) {
+      rows.push(<Row key={i} guess={guesses[i]} evaluation={evaluations[i]} />);
+    } else if (i === guesses.length) {
+      rows.push(<Row key={i} guess={currentGuess} isCurrent isInvalid={invalidShake} />);
+    } else {
+      rows.push(<Row key={i} guess="" />);
+    }
+  }
+  return <div className="board">{rows}</div>;
+}
+
+const KEY_ROWS = [
+  ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+  ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+  ["ENTER", "Z", "X", "C", "V", "B", "N", "M", "BACK"],
+];
+
+function Keyboard({ onKey, keyStatus }) {
+  return (
+    <div className="keyboard">
+      {KEY_ROWS.map((row, ri) => (
+        <div className="key-row" key={ri}>
+          {row.map((key) => {
+            const wide = key === "ENTER" || key === "BACK";
+            const status = keyStatus[key];
+            return (
+              <button
+                key={key}
+                className={`key${wide ? " wide" : ""}${status ? ` ${status}` : ""}`}
+                onClick={() => onKey(key)}
+              >
+                {key === "BACK" ? "⌫" : key === "ENTER" ? "Enter" : key}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. GAME VIEW (shared by Daily + Endless — they just get a different
+//    answer word and different persistence)
+// ---------------------------------------------------------------------
+
+function GameView({ mode, answer, initialGuesses, initialEvaluations, gameOver, onFinish, onNewEndlessRound, palette }) {
+  const [guesses, setGuesses] = useState(initialGuesses || []);
+  const [evaluations, setEvaluations] = useState(initialEvaluations || []);
+  const [currentGuess, setCurrentGuess] = useState("");
+  const [invalidShake, setInvalidShake] = useState(false);
+  const [toast, setToast] = useState("");
+  const [finished, setFinished] = useState(Boolean(gameOver));
+
+  // Rapid taps (or a fast typer) can fire the letter clicks and the ENTER
+  // click within the same batch, before React re-renders — so a
+  // submitGuess closure built from render-time `currentGuess` state can
+  // read a stale, pre-update value (typically "") and wrongly reject a
+  // fully-typed guess as "not enough letters". A ref is updated
+  // synchronously alongside every state change below, so submitGuess
+  // always reads the true current value regardless of batching.
+  const currentGuessRef = useRef("");
+
+  useEffect(() => {
+    setGuesses(initialGuesses || []);
+    setEvaluations(initialEvaluations || []);
+    setCurrentGuess("");
+    currentGuessRef.current = "";
+    setFinished(Boolean(gameOver));
+  }, [answer]);
+
+  const keyStatus = useMemo(() => computeKeyStatuses(guesses, evaluations), [guesses, evaluations]);
+
+  function flashToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(""), 1400);
+  }
+
+  const submitGuess = useCallback(() => {
+    if (finished) return;
+    const guess = currentGuessRef.current;
+    if (guess.length < 5) {
+      setInvalidShake(true);
+      flashToast("Not enough letters");
+      setTimeout(() => setInvalidShake(false), 500);
+      return;
+    }
+    if (!WORD_SET.has(guess)) {
+      setInvalidShake(true);
+      flashToast("Not in word list");
+      setTimeout(() => setInvalidShake(false), 500);
+      return;
+    }
+    const evaluation = evaluateGuess(guess, answer);
+    const nextGuesses = [...guesses, guess];
+    const nextEvaluations = [...evaluations, evaluation];
+    setGuesses(nextGuesses);
+    setEvaluations(nextEvaluations);
+    currentGuessRef.current = "";
+    setCurrentGuess("");
+
+    const won = guess === answer;
+    const over = won || nextGuesses.length >= 6;
+    if (over) {
+      setFinished(true);
+      setTimeout(() => onFinish(nextGuesses, nextEvaluations, won), 1300);
+    }
+  }, [finished, guesses, evaluations, answer, onFinish]);
+
+  const handleKey = useCallback(
+    (key) => {
+      if (finished) return;
+      if (key === "ENTER") {
+        submitGuess();
+      } else if (key === "BACK") {
+        currentGuessRef.current = currentGuessRef.current.slice(0, -1);
+        setCurrentGuess(currentGuessRef.current);
+      } else if (/^[A-Z]$/.test(key) && currentGuessRef.current.length < 5) {
+        currentGuessRef.current = currentGuessRef.current + key;
+        setCurrentGuess(currentGuessRef.current);
+      }
+    },
+    [finished, submitGuess]
+  );
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === "Enter") handleKey("ENTER");
+      else if (e.key === "Backspace") handleKey("BACK");
+      else if (/^[a-zA-Z]$/.test(e.key)) handleKey(e.key.toUpperCase());
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleKey]);
+
+  const won = finished && guesses[guesses.length - 1] === answer;
+
+  return (
+    <div className="game-view" style={{ "--tile-correct": palette.correct, "--tile-present": palette.present }}>
+      <Board guesses={guesses} evaluations={evaluations} currentGuess={currentGuess} invalidShake={invalidShake} />
+      {toast && <div className="toast">{toast}</div>}
+
+      {finished ? (
+        <div className="finish-banner">
+          <p className="finish-title">{won ? (guesses.length === 1 ? "Genius!" : "Nice one!") : `The word was ${answer}`}</p>
+          <div className="finish-actions">
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigator.clipboard && navigator.clipboard.writeText(shareText(guesses, evaluations, won, todayKey()))}
+            >
+              Copy result
+            </button>
+            {mode === "endless" && (
+              <button className="btn btn-primary" onClick={onNewEndlessRound}>
+                Next word
+              </button>
+            )}
+          </div>
+          {mode === "daily" && <p className="finish-note">Come back tomorrow for a new word.</p>}
+        </div>
+      ) : (
+        <Keyboard onKey={handleKey} keyStatus={keyStatus} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. MODALS
+// ---------------------------------------------------------------------
+
+function StatsModal({ stats, onClose }) {
+  const winPct = stats.played > 0 ? Math.round((stats.won / stats.played) * 100) : 0;
+  const maxDist = Math.max(1, ...stats.distribution);
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Statistics</h2>
+        <div className="stats-grid">
+          <div className="stat-box"><div className="stat-num">{stats.played}</div><div className="stat-label">Played</div></div>
+          <div className="stat-box"><div className="stat-num">{winPct}</div><div className="stat-label">Win %</div></div>
+          <div className="stat-box"><div className="stat-num">{stats.currentStreak}</div><div className="stat-label">Streak</div></div>
+          <div className="stat-box"><div className="stat-num">{stats.maxStreak}</div><div className="stat-label">Best</div></div>
+        </div>
+
+        <p className="section-label">Guess distribution</p>
+        <div className="distribution">
+          {stats.distribution.map((count, i) => (
+            <div className="dist-row" key={i}>
+              <span className="dist-num">{i + 1}</span>
+              <div className="dist-bar-track">
+                <div className="dist-bar" style={{ width: `${Math.max(6, (count / maxDist) * 100)}%` }}>{count > 0 ? count : ""}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShopModal({ pro, cosmetics, onSelect, onPurchase, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Tile themes</h2>
+        <p className="theme-note" style={{ marginTop: 0 }}>The daily word and unlimited practice mode are always free — themes are just a look.</p>
+        <div className="palette-grid">
+          {PALETTES.map((p) => {
+            const owned = p.free || pro.owned;
+            const active = cosmetics.activePalette === p.id;
+            return (
+              <button
+                key={p.id}
+                className={`palette-card${active ? " active" : ""}`}
+                onClick={() => (owned ? onSelect(p.id) : onPurchase())}
+              >
+                <div className="palette-swatch">
+                  <span style={{ background: p.correct }}></span>
+                  <span style={{ background: p.present }}></span>
+                </div>
+                <div className="palette-name">{p.name}</div>
+                <div className="palette-status">{active ? "Active" : owned ? "Owned" : p.price}</div>
+              </button>
+            );
+          })}
+        </div>
+        {!pro.owned && (
+          <button className="btn btn-primary" style={{ width: "100%", marginTop: 4 }} onClick={onPurchase}>
+            Unlock all themes + full stats history — $3.99
+          </button>
+        )}
+        <p className="theme-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function collectBackupData() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("wordday.")) {
+      data[key] = localStorage.getItem(key);
+    }
+  }
+  return data;
+}
+
+function BackupModal({ onClose }) {
+  const [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+
+  function handleDownload() {
+    const payload = { app: "wordday", exportedAt: new Date().toISOString(), data: collectBackupData() };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `wordday-backup-${todayKey()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFileChosen(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setError("");
+    const reader = new FileReader();
+    reader.onerror = () => setError("Couldn't read that file — try again.");
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setError("That file doesn't look like a valid backup.");
+        return;
+      }
+      if (!parsed || parsed.app !== "wordday" || typeof parsed.data !== "object" || parsed.data === null) {
+        setError("That file doesn't look like a Wordday backup.");
+        return;
+      }
+      if (!window.confirm("This will replace everything currently on this device. Continue?")) return;
+      setRestoring(true);
+      Object.entries(parsed.data).forEach(([key, value]) => {
+        if (key.startsWith("wordday.") && typeof value === "string") localStorage.setItem(key, value);
+      });
+      window.location.reload();
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup &amp; restore</h2>
+        <p className="theme-note" style={{ marginTop: 0 }}>Save your stats and streak to a file on this device, or bring them back after a lost or reinstalled phone.</p>
+        <button className="btn btn-primary" style={{ width: "100%", marginBottom: 12 }} onClick={handleDownload}>Download backup</button>
+        <label className="btn btn-secondary" style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: restoring ? 0.6 : 1 }}>
+          {restoring ? "Restoring…" : "Restore from backup"}
+          <input type="file" accept="application/json" onChange={handleFileChosen} disabled={restoring} style={{ display: "none" }} />
+        </label>
+        {error && <p className="theme-note" style={{ color: "var(--danger)" }}>{error}</p>}
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+        <div className="modal-buttons">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 8. ROOT APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [cosmetics, setCosmetics] = useState(loadCosmetics);
+  const [stats, setStats] = useState(loadStats);
+  const [history, setHistory] = useState(loadHistory);
+  const [mode, setMode] = useState("daily");
+  const [endlessAnswer, setEndlessAnswer] = useState(() => randomWord());
+  const [endlessRound, setEndlessRound] = useState(0);
+  const [openModal, setOpenModal] = useState(null);
+
+  useEffect(() => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem(THEME_KEY, theme); }, [theme]);
+  useEffect(() => { saveJSON(PRO_KEY, pro); }, [pro]);
+  useEffect(() => { saveJSON(COSMETICS_KEY, cosmetics); }, [cosmetics]);
+  useEffect(() => { saveJSON(STATS_KEY, stats); }, [stats]);
+  useEffect(() => { saveJSON(HISTORY_KEY, history); }, [history]);
+
+  const dateKey = todayKey();
+  const answer = dailyWord(dateKey);
+  const todayResult = history[dateKey];
+
+  const activePalette = PALETTES.find((p) => p.id === cosmetics.activePalette) || PALETTES[0];
+
+  function handleDailyFinish(guesses, evaluations, won) {
+    setHistory((prev) => ({ ...prev, [dateKey]: { guesses, evaluations, won } }));
+    setStats((prev) => {
+      const nextStreak = won ? prev.currentStreak + 1 : 0;
+      const dist = [...prev.distribution];
+      if (won) dist[guesses.length - 1] += 1;
+      return {
+        played: prev.played + 1,
+        won: prev.won + (won ? 1 : 0),
+        currentStreak: nextStreak,
+        maxStreak: Math.max(prev.maxStreak, nextStreak),
+        distribution: dist,
+      };
+    });
+  }
+
+  function handlePurchase() {
+    setPro({ owned: true });
+  }
+
+  function handleSelectPalette(id) {
+    setCosmetics((c) => ({ ...c, activePalette: id }));
+  }
+
+  function newEndlessRound() {
+    setEndlessAnswer((prev) => randomWord(prev));
+    setEndlessRound((r) => r + 1);
+  }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <div className="brand">
+          <span className="brand-mark">🅆</span>
+          <h1>Wordday</h1>
+        </div>
+        <div className="header-actions">
+          <button className="icon-btn" title="Statistics" onClick={() => setOpenModal("stats")}>📊</button>
+          <button className="icon-btn" title="Themes" onClick={() => setOpenModal("shop")}>🎨</button>
+          <button className="icon-btn" title="Backup" onClick={() => setOpenModal("backup")}>💾</button>
+          <button className="icon-btn" title="Toggle theme" onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}>
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+        </div>
+      </header>
+
+      <div className="mode-tabs">
+        <button className={`mode-tab${mode === "daily" ? " active" : ""}`} onClick={() => setMode("daily")}>Daily</button>
+        <button className={`mode-tab${mode === "endless" ? " active" : ""}`} onClick={() => setMode("endless")}>Endless</button>
+      </div>
+
+      {stats.currentStreak > 0 && mode === "daily" && (
+        <p className="streak-line">🔥 {stats.currentStreak} day streak</p>
+      )}
+
+      {mode === "daily" ? (
+        <GameView
+          key={dateKey}
+          mode="daily"
+          answer={answer}
+          initialGuesses={todayResult ? todayResult.guesses : []}
+          initialEvaluations={todayResult ? todayResult.evaluations : []}
+          gameOver={Boolean(todayResult)}
+          onFinish={handleDailyFinish}
+          palette={activePalette}
+        />
+      ) : (
+        <GameView
+          key={`endless-${endlessRound}`}
+          mode="endless"
+          answer={endlessAnswer}
+          initialGuesses={[]}
+          initialEvaluations={[]}
+          gameOver={false}
+          onFinish={() => {}}
+          onNewEndlessRound={newEndlessRound}
+          palette={activePalette}
+        />
+      )}
+
+      {openModal === "stats" && <StatsModal stats={stats} onClose={() => setOpenModal(null)} />}
+      {openModal === "shop" && (
+        <ShopModal pro={pro} cosmetics={cosmetics} onSelect={handleSelectPalette} onPurchase={handlePurchase} onClose={() => setOpenModal(null)} />
+      )}
+      {openModal === "backup" && <BackupModal onClose={() => setOpenModal(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>

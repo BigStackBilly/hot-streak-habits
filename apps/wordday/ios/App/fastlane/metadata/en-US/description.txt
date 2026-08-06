@@ -1,0 +1,19 @@
+Wordday is a five-letter word puzzle — one word a day, the same for everyone, six guesses to find it.
+
+Green means right letter, right spot. Yellow means it's in the word, wrong spot. Six tries to work it out, then come back tomorrow for a new one.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Unlimited free Endless mode for whenever you want more than one puzzle a day
+- A real streak for consecutive days solved
+- Full statistics: games played, win rate, and your guess distribution
+- Copy your result as a shareable grid, no spoilers
+- Dark mode and light mode, your choice
+
+BUILT TO STAY OUT OF YOUR WAY
+
+One puzzle, one board, no ads between rounds, no forced tutorial. A handful of optional tile-color themes are available if you want to change how the board looks — entirely optional, never required. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Start today's word.
