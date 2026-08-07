@@ -6,6 +6,10 @@ on:
 jobs:
   submit:
     runs-on: macos-latest
+    # Fail fast instead of hanging: if no processed TestFlight build exists,
+    # `deliver` polls "Waiting for the build to show up" until GitHub kills
+    # the job at its 6-hour ceiling. 40 minutes is ample for a real run.
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: apps/moodsky
