@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Typly</title>
+<meta name="theme-color" content="#e0a33a" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Typly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// TYPLY — one typing test a day
+//
+// Everyone gets the same passage on the same calendar day, so words-per-
+// minute scores are actually comparable. Local-first, no login, no
+// backend, inline Babel so it runs straight from a file:// URL.
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ---------------------------------------------------------------------
+// Passage bank. Kept to plain ASCII (no curly quotes or em dashes) so a
+// phone keyboard can actually reproduce every character.
+// ---------------------------------------------------------------------
+const PASSAGES = [
+  "The quick brown fox jumps over the lazy dog while the sun sets behind the quiet hills and the river runs on.",
+  "A good habit is built one ordinary day at a time, not in a single burst of motivation that fades by morning.",
+  "Every map is a kind of promise that the world can be understood, folded up, and carried in a coat pocket.",
+  "She learned to type on a machine that punched each letter into paper with a sound like distant applause.",
+  "The best time to plant a tree was twenty years ago, and the second best time is somewhere near this afternoon.",
+  "Coffee cools faster than you expect, which is why the second cup is almost always better than the first one.",
+  "Ships are safe in harbour, but that is not what ships are built for, and every sailor knows it by heart.",
+  "The library smelled of old paper and rain, and nobody spoke above a whisper except the radiator in the corner.",
+  "He counted the stars the way other people count sheep, slowly and without any real hope of finishing.",
+  "Practice does not make perfect, it makes permanent, so be careful which version of the thing you rehearse.",
+  "The city looks different at four in the morning, softer somehow, as if it has finally stopped holding its breath.",
+  "A sentence is a small machine made of words, and every one of them has a job to do or it should be removed.",
+  "Winter arrived without announcement, turning the puddles to glass and the morning air into something you could see.",
+  "The trouble with good advice is that it always sounds obvious right up until the moment you actually need it.",
+  "She kept a notebook of things she noticed, not because they mattered, but because noticing them made the day longer.",
+  "Bread needs only flour, water, salt, and time, and of those four the last one is the hardest to get right.",
+  "The train pulled away and the platform emptied, leaving only the sound of pigeons arguing about nothing at all.",
+  "Somewhere between the first draft and the last one, a piece of writing quietly decides what it is actually about.",
+  "Mountains do not care whether you reach the top, which is exactly why reaching it feels like it means something.",
+  "He fixed the clock, the door, and the fence, and only afterwards admitted that none of them had been broken.",
+  "The garden was mostly weeds by August, but the tomatoes had done well and that felt like enough of a victory.",
+  "Music is just organised air, which does not explain why a certain song can flatten you in under thirty seconds.",
+  "Old maps marked the unknown parts with sea monsters, which is a more honest approach than leaving them blank.",
+  "The recipe said to rest the dough for an hour, and that hour turned out to be the most important ingredient.",
+  "Every language has a word for the feeling of coming home, and none of them translate quite the way you want.",
+  "Rain on a tin roof is the only kind of noise that makes a room feel quieter rather than louder than before.",
+  "The camera adds ten pounds and removes almost everything else that made the moment worth photographing at all.",
+  "She could fix anything with a screwdriver, a paperclip, and the unshakeable belief that it was going to work.",
+  "Deadlines are the only reason most things get finished, which is an uncomfortable thing to learn about yourself.",
+  "The forest floor is a slow conversation between fallen trees and everything patient enough to wait them out.",
+];
+
+const SECONDS = 60;
+
+// ---------------------------------------------------------------------
+// Seeded daily selection
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - EPOCH) / 86400000) + 1);
+}
+
+const passageFor = (seedKey) => PASSAGES[Math.floor(mulberry32(hashString(seedKey))() * PASSAGES.length)];
+
+// ---------------------------------------------------------------------
+// Scoring. WPM uses the standard "5 characters = 1 word" convention so
+// results are comparable with every other typing test.
+// ---------------------------------------------------------------------
+function computeStats(target, typed, elapsedMs) {
+  let correct = 0;
+  for (let i = 0; i < typed.length; i++) if (typed[i] === target[i]) correct++;
+  const minutes = elapsedMs / 60000;
+  const wpm = minutes > 0 ? Math.round(correct / 5 / minutes) : 0;
+  const accuracy = typed.length ? Math.round((correct / typed.length) * 100) : 100;
+  return { wpm, accuracy, correct };
+}
+
+const scoreFrom = (wpm, accuracy) => Math.max(0, Math.round(wpm * (accuracy / 100) * 10));
+
+function gradeFor(wpm) {
+  if (wpm >= 80) return { label: "Blazing", emoji: "🔥" };
+  if (wpm >= 60) return { label: "Fast", emoji: "⚡" };
+  if (wpm >= 40) return { label: "Steady", emoji: "👍" };
+  if (wpm >= 25) return { label: "Warming up", emoji: "🙂" };
+  return { label: "Room to grow", emoji: "🌱" };
+}
+
+// ---------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------
+const K = {
+  stats: "typly:stats", daily: "typly:daily", theme: "typly:theme",
+  pro: "typly:pro", palette: "typly:palette", owned: "typly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+const EMPTY_STATS = {
+  played: 0, totalScore: 0, bestScore: 0, bestWpm: 0, totalWpm: 0,
+  streak: 0, maxStreak: 0, lastPlayed: null, history: [],
+};
+
+function recordResult(stats, key, score, wpm) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.totalWpm += wpm;
+  next.bestScore = Math.max(next.bestScore, score);
+  next.bestWpm = Math.max(next.bestWpm, wpm);
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* replay */ }
+  else next.streak = 1;
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score, wpm }].slice(-60);
+  return next;
+}
+
+const PALETTES = [
+  { id: "amber", name: "Amber", free: true, accent: "#e0a33a", accent2: "#d9723a" },
+  { id: "mint", name: "Mint", free: false, accent: "#3ac9a0", accent2: "#2f9fd6" },
+  { id: "rose", name: "Rose", free: false, accent: "#e0688a", accent2: "#b3529e" },
+  { id: "steel", name: "Steel", free: false, accent: "#7f93ad", accent2: "#5a7392" },
+];
+
+// ---------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup }) {
+  const avgWpm = stats.played ? Math.round(stats.totalWpm / stats.played) : 0;
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">⌨</div>
+        <h1 className="hero-title">Typly</h1>
+        <p className="hero-sub">One passage a day. Same words for everyone.</p>
+      </div>
+
+      {stats.streak > 0 && <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}</div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice run</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Start today's test</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice run</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Tests</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestWpm}</div><div className="stat-cap">Best WPM</div></div>
+        <div className="stat-cell"><div className="stat-num">{avgWpm}</div><div className="stat-cap">Avg WPM</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+function TestView({ passage, isPractice, onDone, onQuit }) {
+  const [typed, setTyped] = useState("");
+  const [startedAt, setStartedAt] = useState(null);
+  const [left, setLeft] = useState(SECONDS);
+  const [live, setLive] = useState({ wpm: 0, accuracy: 100 });
+  const [pasteBlocked, setPasteBlocked] = useState(false);
+
+  const inputRef = useRef(null);
+  const typedRef = useRef("");
+  const startRef = useRef(null);
+  const doneRef = useRef(false);
+
+  // Finishing can be reached three ways (passage complete, timer expiry,
+  // or the effect's tick) so it is guarded to fire exactly once.
+  const finish = useCallback(() => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    const elapsed = startRef.current ? Date.now() - startRef.current : 0;
+    const s = computeStats(passage, typedRef.current, elapsed || 1);
+    onDone({
+      wpm: s.wpm,
+      accuracy: s.accuracy,
+      score: scoreFrom(s.wpm, s.accuracy),
+      chars: typedRef.current.length,
+      completed: typedRef.current.length >= passage.length,
+    });
+  }, [passage, onDone]);
+
+  useEffect(() => {
+    if (!startedAt) return;
+    const t = setInterval(() => {
+      const elapsed = Date.now() - startRef.current;
+      const remaining = Math.max(0, SECONDS * 1000 - elapsed);
+      setLeft(Math.ceil(remaining / 1000));
+      setLive(computeStats(passage, typedRef.current, elapsed));
+      if (remaining <= 0) { clearInterval(t); finish(); }
+    }, 100);
+    return () => clearInterval(t);
+  }, [startedAt, passage, finish]);
+
+  const handleChange = (e) => {
+    if (doneRef.current) return;
+    const value = e.target.value.slice(0, passage.length);
+
+    // Competitive integrity: the whole point is comparable WPM, so reject
+    // any input that arrives faster than a person can type. A paste (or a
+    // keyboard suggestion tap) lands many characters in one change event,
+    // whereas real typing only ever grows the string by one.
+    if (value.length - typedRef.current.length > 1) {
+      e.target.value = typedRef.current;
+      setPasteBlocked(true);
+      setTimeout(() => setPasteBlocked(false), 1600);
+      return;
+    }
+
+    if (startRef.current === null) {
+      startRef.current = Date.now();
+      setStartedAt(startRef.current);
+    }
+    typedRef.current = value;
+    setTyped(value);
+    if (value.length >= passage.length) finish();
+  };
+
+  return (
+    <div className="view test">
+      <div className="test-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="live-stats">
+          <span><b>{live.wpm}</b> wpm</span>
+          <span><b>{live.accuracy}</b>% acc</span>
+        </div>
+        {isPractice ? <div className="practice-tag">Practice</div> : <div className="practice-tag">{left}s</div>}
+      </div>
+
+      <div className="timer-track">
+        <div className="timer-fill" style={{ width: `${(left / SECONDS) * 100}%` }} />
+      </div>
+
+      <div className="passage" onClick={() => inputRef.current && inputRef.current.focus()}>
+        {passage.split("").map((ch, i) => {
+          let cls = "ch";
+          if (i < typed.length) cls += typed[i] === ch ? " ok" : " bad";
+          else if (i === typed.length) cls += " cursor";
+          return <span key={i} className={cls}>{ch}</span>;
+        })}
+      </div>
+
+      <input
+        ref={inputRef}
+        className="capture"
+        value={typed}
+        onChange={handleChange}
+        onPaste={(e) => {
+          e.preventDefault();
+          setPasteBlocked(true);
+          setTimeout(() => setPasteBlocked(false), 1600);
+        }}
+        autoFocus
+        autoCapitalize="off"
+        autoCorrect="off"
+        autoComplete="off"
+        spellCheck="false"
+        aria-label="Type the passage here"
+      />
+
+      <p className={"hint" + (pasteBlocked ? " hint-warn" : "")}>
+        {pasteBlocked
+          ? "Pasting is off — everyone types it out."
+          : startedAt
+            ? "Keep going — the timer stops at 60 seconds."
+            : "Start typing to begin the clock."}
+      </p>
+    </div>
+  );
+}
+
+function Ring({ value, max, label, sub }) {
+  const pct = max > 0 ? Math.min(1, value / max) : 0;
+  const R = 52, C = 2 * Math.PI * R;
+  return (
+    <div className="ring-wrap">
+      <svg viewBox="0 0 120 120" className="ring">
+        <circle cx="60" cy="60" r={R} className="ring-track" />
+        <circle cx="60" cy="60" r={R} className="ring-fill" strokeDasharray={C} strokeDashoffset={C * (1 - pct)} />
+      </svg>
+      <div className="ring-label">
+        <div className="ring-value">{label}</div>
+        <div className="ring-sub">{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function ResultsView({ result, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const grade = gradeFor(result.wpm);
+
+  const share = () => {
+    const bar = (n, max) => {
+      const filled = Math.round((Math.min(n, max) / max) * 10);
+      return "█".repeat(filled) + "░".repeat(10 - filled);
+    };
+    const text = [
+      `Typly #${puzzleNo} — ${result.score}`,
+      `${bar(result.wpm, 100)} ${result.wpm} wpm`,
+      `${result.accuracy}% accuracy`,
+      stats.streak > 1 ? `🔥 ${stats.streak}` : "",
+    ].filter(Boolean).join("\n");
+    if (navigator.share) navigator.share({ text }).catch(() => {});
+    else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{grade.emoji}</div>
+        <div className="grade-label">{grade.label}</div>
+      </div>
+
+      <Ring value={result.wpm} max={100} label={result.wpm} sub="words / min" />
+
+      <div className="review">
+        <div className="review-row"><span className="review-q">Accuracy</span><span className="review-pts">{result.accuracy}%</span></div>
+        <div className="review-row"><span className="review-q">Characters typed</span><span className="review-pts">{result.chars}</span></div>
+        <div className="review-row"><span className="review-q">Finished passage</span><span className="review-pts">{result.completed ? "Yes" : "No"}</span></div>
+        <div className="review-row total"><span className="review-q">Score</span><span className="review-pts">{result.score}</span></div>
+      </div>
+
+      {!isPractice && <button className="btn btn-primary" onClick={share}>{copied ? "Copied!" : "Share score"}</button>}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice run</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const avgWpm = stats.played ? Math.round(stats.totalWpm / stats.played) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.wpm || 0));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Tests</span></div>
+        <div><b>{stats.bestWpm}</b><span>Best WPM</span></div>
+        <div><b>{avgWpm}</b><span>Avg WPM</span></div>
+        <div><b>{stats.bestScore}</b><span>Best score</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} tests (WPM)</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.wpm} wpm`}>
+                <div className="bar" style={{ height: `${((h.wpm || 0) / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">Colour themes only — they never change the passage, the timer, or your score.</p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button key={p.id} className={"palette" + (palette === p.id ? " active" : "")} onClick={() => onPick(p.id, unlocked)}>
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "typly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(Object.values(K).map((k) => [k, localStorage.getItem(k)]).filter(([, v]) => v !== null)),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `typly-backup-${dateKey()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "typly" || !parsed.data) { setMsg("That file isn't a Typly backup."); return; }
+        Object.entries(parsed.data).forEach(([k, v]) => { if (typeof v === "string") localStorage.setItem(k, v); });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your scores live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "dark");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "amber");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [passage, setPassage] = useState("");
+  const [result, setResult] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    setPassage(passageFor(today));
+    setPractice(false);
+    if (todayEntry) { setResult(todayEntry); setScreen("results"); }
+    else setScreen("test");
+  };
+
+  const startPractice = () => {
+    setPassage(passageFor(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("test");
+  };
+
+  const finish = (r) => {
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: r }));
+      setStats((s) => recordResult(s, today, r.score, r.wpm));
+    }
+    setResult(r);
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Typly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+        />
+      )}
+
+      {screen === "test" && passage && (
+        <TestView key={passage} passage={passage} isPractice={practice} onDone={finish} onQuit={() => setScreen("home")} />
+      )}
+
+      {screen === "results" && result && (
+        <ResultsView
+          result={result} stats={stats} isPractice={practice} puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")} onPractice={startPractice}
+        />
+      )}
+
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

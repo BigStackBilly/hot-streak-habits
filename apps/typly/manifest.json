@@ -1,0 +1,15 @@
+{
+  "name": "Typly",
+  "short_name": "Typly",
+  "description": "One typing test a day — the same passage for everyone, plus unlimited free practice.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14151a",
+  "theme_color": "#e0a33a",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
