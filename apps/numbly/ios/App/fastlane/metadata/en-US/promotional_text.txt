@@ -1,0 +1,1 @@
+Combine six numbers with + - x and division to hit the target. Every daily puzzle is guaranteed solvable.

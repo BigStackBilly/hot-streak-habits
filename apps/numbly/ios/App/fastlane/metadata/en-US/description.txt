@@ -1,0 +1,15 @@
+Numbly deals you six numbers and one target. Combine any two with plus, minus, times or divide to make a new number, and keep going until you hit the target exactly.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Every daily puzzle is generated from a real solution, so it is always solvable
+- Partial credit for getting close, and a speed bonus for solving it fast
+- Undo any step, as many times as you like
+- Unlimited free practice puzzles whenever you want
+- Dark mode and light mode, your choice
+
+A handful of optional colour themes are available if you want them — entirely optional, never required, and they never change the numbers or your score. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Three minutes on the clock.

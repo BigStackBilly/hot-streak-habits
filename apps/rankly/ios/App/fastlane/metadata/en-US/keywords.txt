@@ -1,0 +1,1 @@
+ordering game,trivia,quiz,daily puzzle,knowledge game,ranking

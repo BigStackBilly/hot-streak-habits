@@ -1,0 +1,162 @@
+default_platform(:ios)
+
+# Same solo-developer setup as the sibling apps (see Hot Streak Habits'
+# Fastfile for the full rationale on the keychain dance, manual signing,
+# and build-number auto-increment). `produce` can't register a brand-new
+# app here (Developer Portal App ID creation unconditionally requires
+# legacy username/password Spaceship::Portal auth), so registration goes
+# straight through the App Store Connect API instead.
+platform :ios do
+  desc "Register the app (first run only) and upload a new build to TestFlight"
+  lane :beta do
+    app_identifier = "com.Niloc.typly"
+    app_name = "Typly"
+    sku = "typly2026"
+    keychain_path = File.expand_path("~/Library/Keychains/ci_build-db")
+    keychain_password = ENV["CI_KEYCHAIN_PASSWORD"]
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
+
+    begin
+      unless Spaceship::ConnectAPI::BundleId.find(app_identifier)
+        Spaceship::ConnectAPI::BundleId.create(name: app_name, identifier: app_identifier, platform: "IOS")
+        UI.message("Registered new Bundle ID #{app_identifier}")
+      else
+        UI.message("Bundle ID #{app_identifier} already registered, continuing")
+      end
+    rescue => e
+      UI.message("Bundle ID registration skipped/failed, continuing (#{e.message})")
+    end
+
+    begin
+      unless Spaceship::ConnectAPI::App.find(app_identifier)
+        Spaceship::ConnectAPI::App.create(
+          name: app_name,
+          version_string: "1.0",
+          sku: sku,
+          primary_locale: "en-US",
+          bundle_id: app_identifier,
+          platforms: ["IOS"],
+        )
+        UI.message("Created App Store Connect app record for #{app_name}")
+      else
+        UI.message("App Store Connect app record for #{app_identifier} already exists, continuing")
+      end
+    rescue => e
+      UI.message("App Store Connect app creation skipped/failed, continuing (#{e.message})")
+    end
+
+    if File.exist?(keychain_path)
+      sh("security unlock-keychain -p '#{keychain_password}' '#{keychain_path}'")
+      sh("security set-keychain-settings -t 3600 -u '#{keychain_path}'")
+      sh("security list-keychains -d user -s '#{keychain_path}' ~/Library/Keychains/login.keychain-db")
+      sh("security default-keychain -d user -s '#{keychain_path}'")
+    else
+      create_keychain(
+        name: "ci_build",
+        password: keychain_password,
+        default_keychain: true,
+        unlock: true,
+        timeout: 3600,
+        lock_when_sleeps: false,
+      )
+    end
+
+    cert(
+      api_key: api_key,
+      keychain_path: keychain_path,
+      keychain_password: keychain_password,
+    )
+
+    sigh(
+      api_key: api_key,
+      app_identifier: app_identifier,
+    )
+
+    last_build = latest_testflight_build_number(api_key: api_key, app_identifier: app_identifier)
+    increment_build_number(build_number: last_build + 1, xcodeproj: "App.xcodeproj")
+
+    update_code_signing_settings(
+      use_automatic_signing: false,
+      path: "App.xcodeproj",
+      code_sign_identity: "Apple Distribution",
+      profile_name: lane_context[SharedValues::SIGH_NAME],
+      team_id: ENV["APPLE_TEAM_ID"],
+    )
+
+    build_app(
+      project: "App.xcodeproj",
+      scheme: "App",
+      configuration: "Release",
+      export_method: "app-store",
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true,
+    )
+  end
+
+  desc "Push App Store listing metadata/screenshots and submit the latest build for review"
+  lane :release do
+    app_identifier = "com.Niloc.typly"
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+
+    # Work around a confirmed, still-open fastlane bug (fastlane/fastlane#20538):
+    # deliver's upload_metadata unconditionally calls
+    # fetch_app_store_review_detail, which crashes on a brand-new app
+    # version with no review detail yet. Pre-creating that record directly
+    # means it already exists by the time deliver looks for it.
+    begin
+      app = Spaceship::ConnectAPI::App.find(app_identifier)
+      version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
+      version ||= app.create_app_store_version!(platform: "IOS", version_string: "1.0")
+
+      version.create_app_store_review_detail(
+        attributes: {
+          contactFirstName: "Niloc",
+          contactLastName: "Dekkers",
+          contactPhone: "+31627240888",
+          contactEmail: "hotstreakhabits@gmail.com",
+          demoAccountRequired: false,
+        },
+      )
+      UI.message("Created App Store review detail contact info")
+    rescue => e
+      UI.message("Review detail pre-creation skipped/failed (may already exist), continuing (#{e.message})")
+    end
+
+    # Manual release on purpose — even once Apple approves this, it should
+    # stay dark until a human explicitly flips it live. Pricing, App
+    # Privacy, Age Rating, and Content Rights still need a manual pass in
+    # App Store Connect before submit_for_review will actually succeed.
+    deliver(
+      api_key: api_key,
+      app_identifier: app_identifier,
+      app_version: "1.0",
+      submit_for_review: true,
+      automatic_release: false,
+      run_precheck_before_submit: false,
+      force: true,
+      skip_binary_upload: true,
+      overwrite_screenshots: true,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: false,
+      },
+    )
+  end
+end

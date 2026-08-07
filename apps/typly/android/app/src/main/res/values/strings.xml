@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Typly</string>
+    <string name="title_activity_main">Typly</string>
+    <string name="package_name">com.Niloc.typly</string>
+    <string name="custom_url_scheme">com.Niloc.typly</string>
+</resources>
