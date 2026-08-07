@@ -1,0 +1,15 @@
+{
+  "name": "Rankly",
+  "short_name": "Rankly",
+  "description": "Three ordering puzzles a day — the same set for everyone, plus unlimited free practice.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fbf7f2",
+  "theme_color": "#c9643f",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

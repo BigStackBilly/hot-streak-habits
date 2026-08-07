@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Numbly</title>
+<meta name="theme-color" content="#4bb3a5" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Numbly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// NUMBLY — hit the target with the numbers you are dealt
+//
+// Six numbers, one target. Combine any two with + - x / to make a new
+// number; each number can only be used once. Get to the target exactly.
+//
+// Puzzles are generated FORWARDS (random numbers combined into a random
+// expression, whose result becomes the target), which guarantees every
+// daily puzzle has at least one real solution.
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+const TIME_LIMIT = 180;      // seconds
+const MAX_SCORE = 1000;
+const SOLVE_POINTS = 800;
+const MAX_TIME_BONUS = 200;
+
+// ---------------------------------------------------------------------
+// Seeded randomness
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - EPOCH) / 86400000) + 1);
+}
+
+// ---------------------------------------------------------------------
+// Puzzle generation
+// Build the puzzle by actually solving it first: deal six numbers, fold
+// them together with random legal operations, and use the result as the
+// target. A puzzle is only accepted if the target lands in a sane range.
+// ---------------------------------------------------------------------
+const SMALL = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const LARGE = [25, 50, 75, 100];
+
+function apply(a, b, op) {
+  if (op === "+") return a + b;
+  if (op === "-") return a - b;
+  if (op === "x") return a * b;
+  if (op === "/") return b !== 0 && a % b === 0 ? a / b : null;
+  return null;
+}
+
+function generatePuzzle(seedKey) {
+  // Try a handful of variations of the seed until one produces a target in
+  // a satisfying range, rather than accepting a trivial 3 or an absurd 90000.
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const rand = mulberry32(hashString(seedKey + ":" + attempt));
+
+    const numbers = [];
+    const largeCount = 1 + Math.floor(rand() * 2);           // 1 or 2 big numbers
+    for (let i = 0; i < largeCount; i++) numbers.push(LARGE[Math.floor(rand() * LARGE.length)]);
+    while (numbers.length < 6) numbers.push(SMALL[Math.floor(rand() * SMALL.length)]);
+
+    // Fold the pool down, keeping only legal (positive integer) results.
+    let pool = [...numbers];
+    const stepsWanted = 3 + Math.floor(rand() * 3);           // use 4-6 of the numbers
+    let steps = 0;
+    while (pool.length > 1 && steps < stepsWanted) {
+      const i = Math.floor(rand() * pool.length);
+      let j = Math.floor(rand() * pool.length);
+      if (j === i) j = (j + 1) % pool.length;
+      const a = Math.max(pool[i], pool[j]);
+      const b = Math.min(pool[i], pool[j]);
+      const ops = ["+", "-", "x", "/"];
+      const op = ops[Math.floor(rand() * ops.length)];
+      const result = apply(a, b, op);
+      if (result === null || result <= 0 || !Number.isInteger(result)) { steps++; continue; }
+      pool = pool.filter((_, k) => k !== i && k !== j);
+      pool.push(result);
+      steps++;
+    }
+
+    const target = pool.reduce((best, n) => (n > best ? n : best), 0);
+    if (target >= 30 && target <= 999) {
+      return { numbers: shuffle(numbers, rand), target };
+    }
+  }
+  // Deterministic fallback so a puzzle is always returned.
+  return { numbers: [100, 7, 3, 9, 2, 5], target: 226 };
+}
+
+function shuffle(arr, rand) {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------
+function scoreFor(best, target, secondsLeft) {
+  const diff = Math.abs(best - target);
+  let base;
+  if (diff === 0) base = SOLVE_POINTS;
+  else if (diff <= 5) base = 500;
+  else if (diff <= 10) base = 320;
+  else if (diff <= 25) base = 150;
+  else base = 0;
+  // Only an exact solve earns the speed bonus — otherwise stalling to the
+  // buzzer would score the same as giving up immediately.
+  const bonus = diff === 0 ? Math.round((secondsLeft / TIME_LIMIT) * MAX_TIME_BONUS) : 0;
+  return Math.min(MAX_SCORE, base + bonus);
+}
+
+function gradeFor(diff) {
+  if (diff === 0) return { label: "Exact!", emoji: "🎯" };
+  if (diff <= 5) return { label: "So close", emoji: "🌟" };
+  if (diff <= 10) return { label: "Nearly", emoji: "👍" };
+  if (diff <= 25) return { label: "In the region", emoji: "🙂" };
+  return { label: "Room to grow", emoji: "🌱" };
+}
+
+// ---------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------
+const K = {
+  stats: "numbly:stats", daily: "numbly:daily", theme: "numbly:theme",
+  pro: "numbly:pro", palette: "numbly:palette", owned: "numbly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+const EMPTY_STATS = {
+  played: 0, solved: 0, totalScore: 0, bestScore: 0,
+  streak: 0, maxStreak: 0, lastPlayed: null, history: [],
+};
+
+function recordResult(stats, key, score, exact) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.bestScore = Math.max(next.bestScore, score);
+  if (exact) next.solved += 1;
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* replay */ }
+  else next.streak = 1;
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score }].slice(-60);
+  return next;
+}
+
+const PALETTES = [
+  { id: "teal", name: "Teal", free: true, accent: "#4bb3a5", accent2: "#3f8fd0" },
+  { id: "sunset", name: "Sunset", free: false, accent: "#e8925c", accent2: "#d95c72" },
+  { id: "grape", name: "Grape", free: false, accent: "#9a72d9", accent2: "#6d5bc4" },
+  { id: "lawn", name: "Lawn", free: false, accent: "#7cb342", accent2: "#3f9e6a" },
+];
+
+// ---------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup }) {
+  const rate = stats.played ? Math.round((stats.solved / stats.played) * 100) : 0;
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">=</div>
+        <h1 className="hero-title">Numbly</h1>
+        <p className="hero-sub">Six numbers, one target. Same puzzle for everyone.</p>
+      </div>
+
+      {stats.streak > 0 && <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}<span className="done-max">/{MAX_SCORE}</span></div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Play today's puzzle</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Played</div></div>
+        <div className="stat-cell"><div className="stat-num">{rate}%</div><div className="stat-cap">Exact</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestScore}</div><div className="stat-cap">Best</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+const OPS = ["+", "-", "x", "/"];
+
+function GameView({ puzzle, isPractice, onDone, onQuit }) {
+  const { target } = puzzle;
+  // Every tile carries a stable id so two tiles showing the same number
+  // are still distinct things you can select independently.
+  const [tiles, setTiles] = useState(() =>
+    puzzle.numbers.map((n, i) => ({ id: `n${i}`, value: n, spent: false }))
+  );
+  const [pickedId, setPickedId] = useState(null);
+  const [op, setOp] = useState(null);
+  const [steps, setSteps] = useState([]);
+  const [left, setLeft] = useState(TIME_LIMIT);
+  const [flash, setFlash] = useState("");
+
+  const endRef = useRef(Date.now() + TIME_LIMIT * 1000);
+  const doneRef = useRef(false);
+  const tilesRef = useRef(tiles);
+  tilesRef.current = tiles;
+
+  const best = tiles.filter((t) => !t.spent)
+    .reduce((b, t) => (Math.abs(t.value - target) < Math.abs(b - target) ? t.value : b),
+      tiles.find((t) => !t.spent) ? tiles.find((t) => !t.spent).value : 0);
+
+  const finish = useCallback((reason) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    const live = tilesRef.current.filter((t) => !t.spent);
+    const closest = live.reduce((b, t) => (Math.abs(t.value - target) < Math.abs(b - target) ? t.value : b), live[0].value);
+    const secondsLeft = Math.max(0, Math.round((endRef.current - Date.now()) / 1000));
+    onDone({
+      best: closest,
+      target,
+      diff: Math.abs(closest - target),
+      score: scoreFor(closest, target, secondsLeft),
+      steps: stepsRef.current,
+      reason,
+    });
+  }, [target, onDone]);
+
+  const stepsRef = useRef([]);
+  stepsRef.current = steps;
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      const remaining = Math.max(0, endRef.current - Date.now());
+      setLeft(Math.ceil(remaining / 1000));
+      if (remaining <= 0) { clearInterval(t); finish("time"); }
+    }, 200);
+    return () => clearInterval(t);
+  }, [finish]);
+
+  const say = (msg) => { setFlash(msg); setTimeout(() => setFlash(""), 1400); };
+
+  const tapTile = (tile) => {
+    if (tile.spent || doneRef.current) return;
+    if (pickedId === tile.id) { setPickedId(null); setOp(null); return; }
+    if (pickedId === null) { setPickedId(tile.id); return; }
+    if (op === null) { setPickedId(tile.id); return; }
+
+    const a = tiles.find((t) => t.id === pickedId);
+    const b = tile;
+    const hi = Math.max(a.value, b.value);
+    const lo = Math.min(a.value, b.value);
+    const result = apply(hi, lo, op);
+
+    if (result === null) { say(op === "/" ? "That division isn't whole" : "Not allowed"); return; }
+    if (result <= 0) { say("Result must stay positive"); return; }
+
+    const newTile = { id: `r${Date.now()}`, value: result, spent: false };
+    setTiles((prev) => prev.map((t) => (t.id === a.id || t.id === b.id ? { ...t, spent: true } : t)).concat(newTile));
+    setSteps((prev) => [...prev, { text: `${hi} ${op} ${lo} = ${result}`, madeId: newTile.id, usedIds: [a.id, b.id] }]);
+    setPickedId(null);
+    setOp(null);
+
+    if (result === target) {
+      setTimeout(() => finish("solved"), 500);
+    }
+  };
+
+  const undo = () => {
+    if (!steps.length || doneRef.current) return;
+    const last = steps[steps.length - 1];
+    setTiles((prev) =>
+      prev.filter((t) => t.id !== last.madeId)
+        .map((t) => (last.usedIds.includes(t.id) ? { ...t, spent: false } : t))
+    );
+    setSteps((prev) => prev.slice(0, -1));
+    setPickedId(null);
+    setOp(null);
+  };
+
+  const live = tiles.filter((t) => !t.spent);
+  const mins = Math.floor(left / 60);
+  const secs = String(left % 60).padStart(2, "0");
+
+  return (
+    <div className="view game">
+      <div className="game-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="clock">{mins}:{secs}</div>
+        {isPractice && <div className="practice-tag">Practice</div>}
+      </div>
+
+      <div className="target-card">
+        <div className="target-cap">Target</div>
+        <div className="target-num">{target}</div>
+        <div className="target-best">closest so far: <b>{best}</b></div>
+      </div>
+
+      <div className="tiles">
+        {live.map((t) => (
+          <button
+            key={t.id}
+            className={"num-tile" + (pickedId === t.id ? " picked" : "") + (t.value === target ? " hit" : "")}
+            onClick={() => tapTile(t)}
+          >
+            {t.value}
+          </button>
+        ))}
+      </div>
+
+      <div className="ops">
+        {OPS.map((o) => (
+          <button
+            key={o}
+            className={"op-btn" + (op === o ? " active" : "")}
+            onClick={() => setOp(op === o ? null : o)}
+            disabled={pickedId === null}
+          >
+            {o === "x" ? "×" : o === "/" ? "÷" : o}
+          </button>
+        ))}
+      </div>
+
+      {flash && <div className="toast">{flash}</div>}
+
+      <div className="steps">
+        {steps.length === 0
+          ? <div className="steps-empty">Tap a number, an operation, then another number.</div>
+          : steps.map((s, i) => <div key={i} className="step">{s.text}</div>)}
+      </div>
+
+      <div className="game-actions">
+        <button className="btn btn-ghost" onClick={undo} disabled={!steps.length}>Undo</button>
+        <button className="btn btn-primary" onClick={() => finish("gaveup")}>I'm done</button>
+      </div>
+    </div>
+  );
+}
+
+function ResultsView({ result, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const grade = gradeFor(result.diff);
+
+  const share = () => {
+    const mark = result.diff === 0 ? "🎯" : result.diff <= 5 ? "🟩" : result.diff <= 10 ? "🟨" : "⬜";
+    const text = [
+      `Numbly #${puzzleNo} — ${result.score}/${MAX_SCORE}`,
+      `${mark} target ${result.target}, got ${result.best}`,
+      `${result.steps.length} step${result.steps.length === 1 ? "" : "s"}`,
+      stats.streak > 1 ? `🔥 ${stats.streak}` : "",
+    ].filter(Boolean).join("\n");
+    if (navigator.share) navigator.share({ text }).catch(() => {});
+    else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true); setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{grade.emoji}</div>
+        <div className="grade-label">{grade.label}</div>
+        <div className="result-score">{result.score}<span className="done-max">/{MAX_SCORE}</span></div>
+      </div>
+
+      <div className="review">
+        <div className="review-row"><span className="review-q">Target</span><span className="review-pts">{result.target}</span></div>
+        <div className="review-row"><span className="review-q">Your best</span><span className="review-pts">{result.best}</span></div>
+        <div className="review-row"><span className="review-q">Off by</span><span className="review-pts">{result.diff}</span></div>
+      </div>
+
+      {result.steps.length > 0 && (
+        <>
+          <div className="chart-cap">Your working</div>
+          <div className="steps result-steps">
+            {result.steps.map((s, i) => <div key={i} className="step">{s.text}</div>)}
+          </div>
+        </>
+      )}
+
+      {!isPractice && <button className="btn btn-primary" onClick={share}>{copied ? "Copied!" : "Share result"}</button>}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const rate = stats.played ? Math.round((stats.solved / stats.played) * 100) : 0;
+  const avg = stats.played ? Math.round(stats.totalScore / stats.played) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.score));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Played</span></div>
+        <div><b>{rate}%</b><span>Exact</span></div>
+        <div><b>{avg}</b><span>Average</span></div>
+        <div><b>{stats.bestScore}</b><span>Best</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} puzzles</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.score}`}>
+                <div className="bar" style={{ height: `${(h.score / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">Colour themes only — they never change the numbers, the target, or your score.</p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button key={p.id} className={"palette" + (palette === p.id ? " active" : "")} onClick={() => onPick(p.id, unlocked)}>
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "numbly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(Object.values(K).map((k) => [k, localStorage.getItem(k)]).filter(([, v]) => v !== null)),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `numbly-backup-${dateKey()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "numbly" || !parsed.data) { setMsg("That file isn't a Numbly backup."); return; }
+        Object.entries(parsed.data).forEach(([k, v]) => { if (typeof v === "string") localStorage.setItem(k, v); });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your results live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "light");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "teal");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [puzzle, setPuzzle] = useState(null);
+  const [result, setResult] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    setPuzzle(generatePuzzle(today));
+    setPractice(false);
+    if (todayEntry) { setResult(todayEntry); setScreen("results"); }
+    else setScreen("game");
+  };
+
+  const startPractice = () => {
+    setPuzzle(generatePuzzle(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("game");
+  };
+
+  const finish = (r) => {
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: r }));
+      setStats((s) => recordResult(s, today, r.score, r.diff === 0));
+    }
+    setResult(r);
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Numbly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+        />
+      )}
+
+      {screen === "game" && puzzle && (
+        <GameView
+          key={`${puzzle.target}-${practice}-${screen}`}
+          puzzle={puzzle} isPractice={practice}
+          onDone={finish} onQuit={() => setScreen("home")}
+        />
+      )}
+
+      {screen === "results" && result && (
+        <ResultsView
+          result={result} stats={stats} isPractice={practice} puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")} onPractice={startPractice}
+        />
+      )}
+
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
