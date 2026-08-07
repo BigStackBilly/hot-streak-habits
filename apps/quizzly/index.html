@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Quizzly</title>
+<meta name="theme-color" content="#f0a830" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Quizzly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// QUIZZLY — a ten-question trivia gauntlet, once a day
+//
+// Same conventions as the sibling apps in this repo: local-first, zero
+// login, zero backend, inline Babel so the app opens straight from a
+// file:// URL with no build step.
+//
+//   1. Question bank       - compact [q, options, correctIndex, category]
+//   2. Seeded randomness   - same daily quiz for everyone, derived from date
+//   3. Scoring             - correctness + a speed bonus
+//   4. Storage helpers     - stats, daily lock, theme, cosmetics
+//   5. Views               - Home, Quiz, Results
+//   6. Modals              - Stats, Shop, Backup
+//   7. App                 - top-level state + routing
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ---------------------------------------------------------------------
+// 1. QUESTION BANK
+// Compact tuples keep this readable at volume: [question, options, correct, category]
+// ---------------------------------------------------------------------
+const RAW_QUESTIONS = [
+  ["What is the largest planet in our solar system?", ["Saturn", "Jupiter", "Neptune", "Earth"], 1, "Science"],
+  ["What gas do plants absorb from the atmosphere?", ["Oxygen", "Nitrogen", "Carbon dioxide", "Hydrogen"], 2, "Science"],
+  ["How many bones are in the adult human body?", ["206", "187", "231", "156"], 0, "Science"],
+  ["What is the chemical symbol for gold?", ["Gd", "Go", "Au", "Ag"], 2, "Science"],
+  ["What is the hardest naturally occurring substance?", ["Quartz", "Diamond", "Titanium", "Granite"], 1, "Science"],
+  ["Water boils at what temperature at sea level in Celsius?", ["90", "100", "110", "80"], 1, "Science"],
+  ["What force keeps planets in orbit around the sun?", ["Magnetism", "Friction", "Gravity", "Inertia"], 2, "Science"],
+  ["What is the most abundant gas in Earth's atmosphere?", ["Oxygen", "Carbon dioxide", "Nitrogen", "Argon"], 2, "Science"],
+  ["Which blood type is the universal donor?", ["AB positive", "O negative", "A positive", "B negative"], 1, "Science"],
+  ["What does DNA stand for?", ["Deoxyribonucleic acid", "Dinucleic acid", "Deoxyribose nucleus", "Dual nucleic acid"], 0, "Science"],
+  ["How many chambers does the human heart have?", ["Two", "Three", "Four", "Five"], 2, "Science"],
+  ["What is the speed of light approximately?", ["300,000 km/s", "150,000 km/s", "1,000 km/s", "3,000 km/s"], 0, "Science"],
+  ["Which planet is known as the Red Planet?", ["Venus", "Mars", "Mercury", "Jupiter"], 1, "Science"],
+  ["What is the smallest unit of matter?", ["Molecule", "Cell", "Atom", "Electron"], 2, "Science"],
+  ["What organ produces insulin?", ["Liver", "Pancreas", "Kidney", "Spleen"], 1, "Science"],
+  ["What is the chemical formula for table salt?", ["NaCl", "KCl", "H2O", "CaCO3"], 0, "Science"],
+  ["Which scientist proposed the theory of general relativity?", ["Newton", "Bohr", "Einstein", "Galileo"], 2, "Science"],
+  ["What is the largest organ in the human body?", ["Liver", "Brain", "Skin", "Lungs"], 2, "Science"],
+  ["How many teeth does a typical adult human have?", ["28", "30", "32", "34"], 2, "Science"],
+  ["What type of energy does the sun primarily give off?", ["Nuclear", "Solar radiation", "Chemical", "Kinetic"], 1, "Science"],
+
+  ["In what year did World War II end?", ["1943", "1944", "1945", "1946"], 2, "History"],
+  ["Who was the first person to walk on the moon?", ["Buzz Aldrin", "Neil Armstrong", "Yuri Gagarin", "Michael Collins"], 1, "History"],
+  ["Which ancient civilization built Machu Picchu?", ["Aztec", "Maya", "Inca", "Olmec"], 2, "History"],
+  ["Who painted the ceiling of the Sistine Chapel?", ["Da Vinci", "Michelangelo", "Raphael", "Donatello"], 1, "History"],
+  ["The Berlin Wall fell in which year?", ["1987", "1989", "1991", "1985"], 1, "History"],
+  ["Which empire was ruled by Julius Caesar?", ["Greek", "Roman", "Ottoman", "Persian"], 1, "History"],
+  ["Who was the first President of the United States?", ["Jefferson", "Adams", "Washington", "Franklin"], 2, "History"],
+  ["The Titanic sank in what year?", ["1910", "1912", "1915", "1918"], 1, "History"],
+  ["Which country gifted the Statue of Liberty to the USA?", ["Britain", "Spain", "France", "Italy"], 2, "History"],
+  ["Who wrote the Declaration of Independence primarily?", ["Washington", "Jefferson", "Madison", "Hamilton"], 1, "History"],
+  ["The Great Wall was built to protect which country?", ["Japan", "Korea", "China", "Mongolia"], 2, "History"],
+  ["Which war was fought between the North and South USA?", ["Revolutionary War", "Civil War", "War of 1812", "Spanish-American War"], 1, "History"],
+  ["Cleopatra was the last active pharaoh of which country?", ["Greece", "Egypt", "Rome", "Persia"], 1, "History"],
+  ["In which century did the Industrial Revolution begin?", ["16th", "17th", "18th", "19th"], 2, "History"],
+  ["Who was known as the Iron Lady?", ["Queen Victoria", "Margaret Thatcher", "Angela Merkel", "Indira Gandhi"], 1, "History"],
+  ["Which ship did Charles Darwin sail on?", ["Endeavour", "Beagle", "Victory", "Discovery"], 1, "History"],
+  ["The Renaissance began in which country?", ["France", "Italy", "Spain", "Germany"], 1, "History"],
+  ["Who invented the printing press in Europe?", ["Gutenberg", "Da Vinci", "Newton", "Galileo"], 0, "History"],
+  ["Which city was buried by Mount Vesuvius in 79 AD?", ["Athens", "Pompeii", "Carthage", "Alexandria"], 1, "History"],
+  ["The Cold War was primarily between the USA and which country?", ["China", "Germany", "Soviet Union", "Japan"], 2, "History"],
+
+  ["What is the capital of Australia?", ["Sydney", "Melbourne", "Canberra", "Perth"], 2, "Geography"],
+  ["Which is the longest river in the world?", ["Amazon", "Nile", "Yangtze", "Mississippi"], 1, "Geography"],
+  ["How many continents are there?", ["Five", "Six", "Seven", "Eight"], 2, "Geography"],
+  ["What is the smallest country in the world?", ["Monaco", "Vatican City", "San Marino", "Liechtenstein"], 1, "Geography"],
+  ["Mount Everest lies on the border of Nepal and which country?", ["India", "China", "Bhutan", "Pakistan"], 1, "Geography"],
+  ["Which ocean is the largest?", ["Atlantic", "Indian", "Arctic", "Pacific"], 3, "Geography"],
+  ["What is the capital of Japan?", ["Osaka", "Kyoto", "Tokyo", "Nagoya"], 2, "Geography"],
+  ["Which desert is the largest hot desert?", ["Gobi", "Sahara", "Kalahari", "Arabian"], 1, "Geography"],
+  ["Iceland's capital city is?", ["Oslo", "Bergen", "Reykjavik", "Helsinki"], 2, "Geography"],
+  ["Which country has the most natural lakes?", ["Russia", "Canada", "Finland", "USA"], 1, "Geography"],
+  ["The Amazon rainforest is mostly in which country?", ["Peru", "Colombia", "Brazil", "Venezuela"], 2, "Geography"],
+  ["What is the capital of Canada?", ["Toronto", "Vancouver", "Ottawa", "Montreal"], 2, "Geography"],
+  ["Which US state is the largest by area?", ["Texas", "California", "Alaska", "Montana"], 2, "Geography"],
+  ["The Sahara Desert is on which continent?", ["Asia", "Africa", "Australia", "South America"], 1, "Geography"],
+  ["Which country is home to the kangaroo?", ["New Zealand", "Australia", "South Africa", "Argentina"], 1, "Geography"],
+  ["What is the capital of Brazil?", ["Rio de Janeiro", "Sao Paulo", "Brasilia", "Salvador"], 2, "Geography"],
+  ["Which mountain range separates Europe and Asia?", ["Alps", "Andes", "Urals", "Caucasus"], 2, "Geography"],
+  ["How many time zones does Russia span?", ["Seven", "Nine", "Eleven", "Thirteen"], 2, "Geography"],
+  ["The Great Barrier Reef is off the coast of which country?", ["Indonesia", "Australia", "Philippines", "Fiji"], 1, "Geography"],
+  ["Which African country was never colonized?", ["Kenya", "Ethiopia", "Ghana", "Senegal"], 1, "Geography"],
+
+  ["Who directed the movie Jaws?", ["Lucas", "Spielberg", "Scorsese", "Coppola"], 1, "Screen"],
+  ["Which movie features the line 'May the Force be with you'?", ["Star Trek", "Star Wars", "Dune", "Blade Runner"], 1, "Screen"],
+  ["What is the highest-grossing film franchise of all time?", ["Star Wars", "Harry Potter", "Marvel Cinematic Universe", "James Bond"], 2, "Screen"],
+  ["Which animated studio made Toy Story?", ["DreamWorks", "Pixar", "Illumination", "Blue Sky"], 1, "Screen"],
+  ["In The Matrix, which pill does Neo take?", ["Blue", "Red", "Green", "White"], 1, "Screen"],
+  ["Who played Jack in Titanic?", ["Brad Pitt", "Leonardo DiCaprio", "Matt Damon", "Tom Cruise"], 1, "Screen"],
+  ["Which TV show features the Iron Throne?", ["The Witcher", "Vikings", "Game of Thrones", "The Crown"], 2, "Screen"],
+  ["What color is the ogre Shrek?", ["Blue", "Green", "Brown", "Grey"], 1, "Screen"],
+  ["Which film won Best Picture at the 2020 Oscars?", ["1917", "Joker", "Parasite", "Ford v Ferrari"], 2, "Screen"],
+  ["Who plays Iron Man in the Marvel films?", ["Chris Evans", "Robert Downey Jr.", "Mark Ruffalo", "Chris Hemsworth"], 1, "Screen"],
+  ["In which city is the sitcom Friends set?", ["Chicago", "Los Angeles", "New York", "Boston"], 2, "Screen"],
+  ["What is the name of the lion in The Lion King?", ["Mufasa", "Simba", "Scar", "Nala"], 1, "Screen"],
+  ["Which director made Pulp Fiction?", ["Nolan", "Tarantino", "Fincher", "Anderson"], 1, "Screen"],
+  ["The Office (US) is set in which town?", ["Syracuse", "Scranton", "Buffalo", "Albany"], 1, "Screen"],
+  ["What is Batman's home city called?", ["Metropolis", "Star City", "Gotham", "Central City"], 2, "Screen"],
+  ["Which movie features a character named Forrest?", ["Rain Man", "Forrest Gump", "Big Fish", "Cast Away"], 1, "Screen"],
+  ["Who directed Inception?", ["Villeneuve", "Nolan", "Cameron", "Ridley Scott"], 1, "Screen"],
+  ["In Breaking Bad, what is Walter White's alias?", ["Gus", "Heisenberg", "Saul", "Tuco"], 1, "Screen"],
+  ["Which franchise features the character Hermione Granger?", ["Narnia", "Harry Potter", "Percy Jackson", "His Dark Materials"], 1, "Screen"],
+  ["What kind of animal is Dory in Finding Nemo?", ["Clownfish", "Blue tang", "Angelfish", "Guppy"], 1, "Screen"],
+
+  ["Which band released the album Abbey Road?", ["The Rolling Stones", "The Beatles", "The Who", "Pink Floyd"], 1, "Music"],
+  ["How many strings does a standard guitar have?", ["Four", "Five", "Six", "Seven"], 2, "Music"],
+  ["Who is known as the King of Pop?", ["Elvis Presley", "Michael Jackson", "Prince", "James Brown"], 1, "Music"],
+  ["Which instrument has 88 keys?", ["Organ", "Piano", "Accordion", "Harpsichord"], 1, "Music"],
+  ["What nationality was composer Ludwig van Beethoven?", ["Austrian", "German", "Italian", "French"], 1, "Music"],
+  ["Which artist released the album '25'?", ["Beyonce", "Adele", "Taylor Swift", "Rihanna"], 1, "Music"],
+  ["What does DJ stand for?", ["Dance Jockey", "Disc Jockey", "Digital Jockey", "Drum Jockey"], 1, "Music"],
+  ["Which band performed Bohemian Rhapsody?", ["Led Zeppelin", "Queen", "The Eagles", "Aerosmith"], 1, "Music"],
+  ["How many musicians are in a quartet?", ["Three", "Four", "Five", "Six"], 1, "Music"],
+  ["Which genre did Bob Marley popularize?", ["Ska", "Reggae", "Calypso", "Soca"], 1, "Music"],
+  ["What is the highest female singing voice?", ["Alto", "Mezzo-soprano", "Soprano", "Contralto"], 2, "Music"],
+  ["Which country is the birthplace of tango music?", ["Brazil", "Argentina", "Spain", "Cuba"], 1, "Music"],
+  ["Who composed The Four Seasons?", ["Bach", "Vivaldi", "Mozart", "Handel"], 1, "Music"],
+  ["Which decade is associated with disco's peak?", ["1960s", "1970s", "1980s", "1990s"], 1, "Music"],
+  ["What instrument did Louis Armstrong famously play?", ["Saxophone", "Trumpet", "Clarinet", "Trombone"], 1, "Music"],
+
+  ["How many players are on a soccer team on the field?", ["Nine", "Ten", "Eleven", "Twelve"], 2, "Sport"],
+  ["In which sport would you perform a slam dunk?", ["Volleyball", "Basketball", "Tennis", "Handball"], 1, "Sport"],
+  ["How often are the Summer Olympics held?", ["Every 2 years", "Every 3 years", "Every 4 years", "Every 5 years"], 2, "Sport"],
+  ["What is the maximum score in a single frame of bowling?", ["10", "20", "30", "40"], 2, "Sport"],
+  ["Which country has won the most FIFA World Cups?", ["Germany", "Brazil", "Italy", "Argentina"], 1, "Sport"],
+  ["In tennis, what is a score of zero called?", ["Nil", "Love", "Duck", "Blank"], 1, "Sport"],
+  ["How many holes are in a standard round of golf?", ["9", "12", "18", "21"], 2, "Sport"],
+  ["Which sport uses a shuttlecock?", ["Squash", "Badminton", "Table tennis", "Racquetball"], 1, "Sport"],
+  ["The Tour de France is which kind of race?", ["Running", "Cycling", "Sailing", "Motor"], 1, "Sport"],
+  ["How many rings are on the Olympic flag?", ["Four", "Five", "Six", "Seven"], 1, "Sport"],
+  ["In American football, how many points is a touchdown?", ["Three", "Six", "Seven", "Nine"], 1, "Sport"],
+  ["Which martial art originated in Korea?", ["Karate", "Judo", "Taekwondo", "Kung Fu"], 2, "Sport"],
+  ["What is the diameter of a basketball hoop in inches?", ["16", "18", "20", "22"], 1, "Sport"],
+  ["In cricket, how many players are on a team?", ["Nine", "Ten", "Eleven", "Twelve"], 2, "Sport"],
+  ["Which Grand Slam tennis event is played on clay?", ["Wimbledon", "US Open", "French Open", "Australian Open"], 2, "Sport"],
+
+  ["What is the main ingredient in guacamole?", ["Tomato", "Avocado", "Pepper", "Onion"], 1, "Food"],
+  ["Which country is the origin of sushi?", ["China", "Japan", "Korea", "Thailand"], 1, "Food"],
+  ["What spice is the most expensive by weight?", ["Vanilla", "Saffron", "Cardamom", "Cinnamon"], 1, "Food"],
+  ["Which nut is used to make marzipan?", ["Walnut", "Almond", "Hazelnut", "Cashew"], 1, "Food"],
+  ["What type of pastry is used for profiteroles?", ["Puff", "Choux", "Shortcrust", "Filo"], 1, "Food"],
+  ["Which fruit is known for having its seeds on the outside?", ["Blueberry", "Strawberry", "Raspberry", "Kiwi"], 1, "Food"],
+  ["What is tofu made from?", ["Rice", "Soybeans", "Wheat", "Chickpeas"], 1, "Food"],
+  ["Which cheese is traditionally used on pizza margherita?", ["Cheddar", "Mozzarella", "Parmesan", "Gouda"], 1, "Food"],
+  ["What gives paella its yellow color?", ["Turmeric", "Saffron", "Curry", "Annatto"], 1, "Food"],
+  ["Which vegetable is a common base for kimchi?", ["Carrot", "Cabbage", "Radish", "Cucumber"], 1, "Food"],
+  ["What is the primary grain in traditional risotto?", ["Basmati", "Arborio", "Jasmine", "Wild rice"], 1, "Food"],
+  ["Which drink is made from fermented grapes?", ["Beer", "Wine", "Cider", "Sake"], 1, "Food"],
+  ["What is the hottest measure on the Scoville scale used for?", ["Sweetness", "Spiciness", "Saltiness", "Acidity"], 1, "Food"],
+  ["Which country invented the croissant's ancestor, the kipferl?", ["France", "Austria", "Belgium", "Switzerland"], 1, "Food"],
+  ["What is the main ingredient in hummus?", ["Lentils", "Chickpeas", "Beans", "Peas"], 1, "Food"],
+
+  ["How many letters are in the English alphabet?", ["24", "25", "26", "27"], 2, "Words"],
+  ["What is the plural of 'cactus'?", ["Cactuses", "Cacti", "Cactus", "Cactae"], 1, "Words"],
+  ["Which language has the most native speakers?", ["English", "Mandarin Chinese", "Spanish", "Hindi"], 1, "Words"],
+  ["What does 'et cetera' mean?", ["And so on", "For example", "That is", "In place of"], 0, "Words"],
+  ["A word that reads the same backwards is a?", ["Anagram", "Palindrome", "Homonym", "Acronym"], 1, "Words"],
+  ["What is a group of crows called?", ["Flock", "Murder", "Pack", "Swarm"], 1, "Words"],
+  ["Which punctuation mark ends a question?", ["Period", "Question mark", "Comma", "Colon"], 1, "Words"],
+  ["What does the acronym NASA stand for's first word?", ["National", "Nuclear", "Northern", "Natural"], 0, "Words"],
+  ["A synonym for 'happy' is?", ["Morose", "Elated", "Weary", "Timid"], 1, "Words"],
+  ["Which language is Latin the ancestor of?", ["German", "Spanish", "Russian", "Greek"], 1, "Words"],
+  ["What is the study of word origins called?", ["Phonetics", "Etymology", "Semantics", "Syntax"], 1, "Words"],
+  ["How many syllables are in the word 'beautiful'?", ["Two", "Three", "Four", "Five"], 1, "Words"],
+  ["What is an antonym for 'ancient'?", ["Old", "Modern", "Historic", "Aged"], 1, "Words"],
+  ["Which alphabet is used to write Russian?", ["Latin", "Cyrillic", "Greek", "Arabic"], 1, "Words"],
+  ["A short saying expressing a general truth is a?", ["Proverb", "Parable", "Sonnet", "Limerick"], 0, "Words"],
+
+  ["Which animal is the fastest land mammal?", ["Lion", "Cheetah", "Gazelle", "Horse"], 1, "Nature"],
+  ["How many legs does a spider have?", ["Six", "Eight", "Ten", "Twelve"], 1, "Nature"],
+  ["What is a baby kangaroo called?", ["Cub", "Joey", "Kit", "Calf"], 1, "Nature"],
+  ["Which bird is known for its ability to mimic sounds?", ["Eagle", "Parrot", "Sparrow", "Owl"], 1, "Nature"],
+  ["What is the largest mammal on Earth?", ["Elephant", "Blue whale", "Giraffe", "Hippo"], 1, "Nature"],
+  ["Which insect produces honey?", ["Wasp", "Bee", "Ant", "Beetle"], 1, "Nature"],
+  ["How many hearts does an octopus have?", ["One", "Two", "Three", "Four"], 2, "Nature"],
+  ["What do you call a group of lions?", ["Herd", "Pride", "Pack", "Troop"], 1, "Nature"],
+  ["Which tree produces acorns?", ["Maple", "Oak", "Pine", "Birch"], 1, "Nature"],
+  ["What is the tallest type of grass?", ["Wheat", "Bamboo", "Sugarcane", "Reed"], 1, "Nature"],
+  ["Which animal is known as the ship of the desert?", ["Horse", "Camel", "Donkey", "Llama"], 1, "Nature"],
+  ["How long is an elephant's gestation period roughly?", ["9 months", "22 months", "15 months", "30 months"], 1, "Nature"],
+  ["Which sea creature has tentacles and can sting?", ["Starfish", "Jellyfish", "Crab", "Clam"], 1, "Nature"],
+  ["What is the primary diet of a panda?", ["Fish", "Bamboo", "Berries", "Insects"], 1, "Nature"],
+  ["Which bird cannot fly?", ["Swan", "Penguin", "Heron", "Falcon"], 1, "Nature"],
+
+  ["How many minutes are in a full day?", ["1200", "1440", "1600", "2400"], 1, "General"],
+  ["What is the currency of Japan?", ["Won", "Yen", "Yuan", "Baht"], 1, "General"],
+  ["How many sides does a hexagon have?", ["Five", "Six", "Seven", "Eight"], 1, "General"],
+  ["What color do you get mixing blue and yellow?", ["Purple", "Green", "Orange", "Brown"], 1, "General"],
+  ["How many degrees are in a circle?", ["180", "270", "360", "450"], 2, "General"],
+  ["What is the Roman numeral for 50?", ["X", "L", "C", "D"], 1, "General"],
+  ["Which month has 28 days in a common year?", ["January", "February", "March", "April"], 1, "General"],
+  ["How many cards are in a standard deck without jokers?", ["48", "50", "52", "54"], 2, "General"],
+  ["What is the freezing point of water in Fahrenheit?", ["0", "32", "45", "12"], 1, "General"],
+  ["Which direction does the sun rise from?", ["North", "East", "South", "West"], 1, "General"],
+  ["How many wheels does a standard bicycle have?", ["One", "Two", "Three", "Four"], 1, "General"],
+  ["What does WWW stand for's first word?", ["Wide", "World", "Web", "Wireless"], 1, "General"],
+  ["How many seconds are in an hour?", ["360", "600", "3600", "6000"], 2, "General"],
+  ["Which shape has all sides equal and all angles 90 degrees?", ["Rectangle", "Square", "Rhombus", "Trapezoid"], 1, "General"],
+  ["What is the largest single-digit prime number?", ["5", "7", "9", "3"], 1, "General"],
+  ["How many colors are in a standard rainbow?", ["Five", "Six", "Seven", "Eight"], 2, "General"],
+  ["What is half of 250?", ["100", "125", "150", "175"], 1, "General"],
+  ["How many players are in a standard chess game?", ["One", "Two", "Three", "Four"], 1, "General"],
+  ["Which is heavier: a kilogram of feathers or steel?", ["Feathers", "Steel", "They weigh the same", "Depends on volume"], 2, "General"],
+  ["How many continents start with the letter A?", ["One", "Two", "Three", "Four"], 1, "General"],
+];
+
+const QUESTIONS = RAW_QUESTIONS.map(([q, options, correct, category], i) => ({
+  id: i,
+  q,
+  options,
+  correct,
+  category,
+}));
+
+const QUIZ_LENGTH = 10;
+const SECONDS_PER_QUESTION = 15;
+const BASE_POINTS = 100;
+const MAX_SPEED_BONUS = 100;
+const MAX_SCORE = QUIZ_LENGTH * (BASE_POINTS + MAX_SPEED_BONUS);
+
+// ---------------------------------------------------------------------
+// 2. SEEDED RANDOMNESS
+// Everyone gets the same quiz on the same calendar day because the seed
+// is derived from the local date string, never from a server.
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededPick(seed, count, poolSize) {
+  const rand = mulberry32(seed);
+  const indices = Array.from({ length: poolSize }, (_, i) => i);
+  // Fisher-Yates, but we only need the first `count` positions settled.
+  for (let i = 0; i < count && i < indices.length - 1; i++) {
+    const j = i + Math.floor(rand() * (indices.length - i));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  return indices.slice(0, count);
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return Math.max(1, Math.round((date - EPOCH) / 86400000) + 1);
+}
+
+function buildQuiz(seedKey) {
+  const seed = hashString(seedKey);
+  const picks = seededPick(seed, QUIZ_LENGTH, QUESTIONS.length);
+  const rand = mulberry32(seed ^ 0x9e3779b9);
+  // Shuffle each question's options so the correct answer isn't always in
+  // the same slot as it appears in the source bank.
+  return picks.map((qi) => {
+    const base = QUESTIONS[qi];
+    const order = [0, 1, 2, 3];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return {
+      id: base.id,
+      q: base.q,
+      category: base.category,
+      options: order.map((o) => base.options[o]),
+      correct: order.indexOf(base.correct),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------
+// 3. SCORING
+// ---------------------------------------------------------------------
+function scoreFor(correct, msRemaining) {
+  if (!correct) return 0;
+  const fraction = Math.max(0, Math.min(1, msRemaining / (SECONDS_PER_QUESTION * 1000)));
+  return BASE_POINTS + Math.round(fraction * MAX_SPEED_BONUS);
+}
+
+function gradeFor(score) {
+  const pct = score / MAX_SCORE;
+  if (pct >= 0.9) return { label: "Genius", emoji: "🏆" };
+  if (pct >= 0.75) return { label: "Sharp", emoji: "🌟" };
+  if (pct >= 0.6) return { label: "Solid", emoji: "👍" };
+  if (pct >= 0.4) return { label: "Warming up", emoji: "🙂" };
+  return { label: "Room to grow", emoji: "🌱" };
+}
+
+// ---------------------------------------------------------------------
+// 4. STORAGE
+// ---------------------------------------------------------------------
+const K = {
+  stats: "quizzly:stats",
+  daily: "quizzly:daily",
+  theme: "quizzly:theme",
+  pro: "quizzly:pro",
+  palette: "quizzly:palette",
+  owned: "quizzly:owned",
+};
+
+function readJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    /* storage full or unavailable — the game still plays, it just won't persist */
+  }
+}
+
+const EMPTY_STATS = {
+  played: 0,
+  totalScore: 0,
+  bestScore: 0,
+  perfect: 0,
+  streak: 0,
+  maxStreak: 0,
+  lastPlayed: null,
+  history: [],
+};
+
+function recordResult(stats, key, score, results) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.bestScore = Math.max(next.bestScore, score);
+  if (results.every(Boolean)) next.perfect += 1;
+
+  // A streak continues only if the previous play was literally yesterday.
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* same day replay — leave streak alone */ }
+  else next.streak = 1;
+
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score }].slice(-60);
+  return next;
+}
+
+// ---------------------------------------------------------------------
+// Cosmetic palettes — purely visual, never affects the questions or score.
+// ---------------------------------------------------------------------
+const PALETTES = [
+  { id: "honey", name: "Honey", free: true, accent: "#f0a830", accent2: "#e2703a" },
+  { id: "berry", name: "Berry", free: false, accent: "#d6456b", accent2: "#8d3bb0" },
+  { id: "mint", name: "Mint", free: false, accent: "#2fb9a0", accent2: "#3a8fd6" },
+  { id: "dusk", name: "Dusk", free: false, accent: "#7c6ce0", accent2: "#c0519b" },
+];
+
+// ---------------------------------------------------------------------
+// 5. VIEWS
+// ---------------------------------------------------------------------
+
+function Ring({ value, max, label, sub }) {
+  const pct = max > 0 ? Math.min(1, value / max) : 0;
+  const R = 52;
+  const C = 2 * Math.PI * R;
+  return (
+    <div className="ring-wrap">
+      <svg viewBox="0 0 120 120" className="ring">
+        <circle cx="60" cy="60" r={R} className="ring-track" />
+        <circle
+          cx="60"
+          cy="60"
+          r={R}
+          className="ring-fill"
+          strokeDasharray={C}
+          strokeDashoffset={C * (1 - pct)}
+        />
+      </svg>
+      <div className="ring-label">
+        <div className="ring-value">{label}</div>
+        <div className="ring-sub">{sub}</div>
+      </div>
+    </div>
+  );
+}
+
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup }) {
+  const avg = stats.played ? Math.round(stats.totalScore / stats.played) : 0;
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">?</div>
+        <h1 className="hero-title">Quizzly</h1>
+        <p className="hero-sub">Ten questions. Once a day. Same set for everyone.</p>
+      </div>
+
+      {stats.streak > 0 && (
+        <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>
+      )}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}<span className="done-max">/{MAX_SCORE}</span></div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice round</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Play today's quiz</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice round</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Played</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestScore}</div><div className="stat-cap">Best</div></div>
+        <div className="stat-cell"><div className="stat-num">{avg}</div><div className="stat-cap">Average</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+function QuizView({ quiz, onDone, isPractice, onQuit }) {
+  const [index, setIndex] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [results, setResults] = useState([]);
+  const [scores, setScores] = useState([]);
+  const [msLeft, setMsLeft] = useState(SECONDS_PER_QUESTION * 1000);
+
+  // Refs mirror the state that the timer callback reads, so a tick that
+  // fires between a click and the re-render can't act on a stale value.
+  const pickedRef = useRef(null);
+  const startedRef = useRef(Date.now());
+  const advancingRef = useRef(false);
+
+  const question = quiz[index];
+
+  const advance = useCallback(
+    (choice, remaining) => {
+      if (advancingRef.current) return;
+      advancingRef.current = true;
+
+      const correct = choice === question.correct;
+      const gained = scoreFor(correct, remaining);
+      const nextResults = [...results, correct];
+      const nextScores = [...scores, gained];
+      setResults(nextResults);
+      setScores(nextScores);
+
+      setTimeout(() => {
+        if (index + 1 >= quiz.length) {
+          onDone(nextResults, nextScores);
+        } else {
+          setIndex(index + 1);
+          setPicked(null);
+          pickedRef.current = null;
+          setMsLeft(SECONDS_PER_QUESTION * 1000);
+          startedRef.current = Date.now();
+          advancingRef.current = false;
+        }
+      }, 900);
+    },
+    [index, question, quiz.length, results, scores, onDone]
+  );
+
+  const choose = useCallback(
+    (i) => {
+      if (pickedRef.current !== null || advancingRef.current) return;
+      pickedRef.current = i;
+      setPicked(i);
+      const remaining = SECONDS_PER_QUESTION * 1000 - (Date.now() - startedRef.current);
+      advance(i, remaining);
+    },
+    [advance]
+  );
+
+  useEffect(() => {
+    startedRef.current = Date.now();
+    advancingRef.current = false;
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - startedRef.current;
+      const remaining = SECONDS_PER_QUESTION * 1000 - elapsed;
+      setMsLeft(Math.max(0, remaining));
+      if (remaining <= 0 && pickedRef.current === null && !advancingRef.current) {
+        pickedRef.current = -1;
+        setPicked(-1);
+        advance(-1, 0);
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [index, advance]);
+
+  const timePct = msLeft / (SECONDS_PER_QUESTION * 1000);
+
+  return (
+    <div className="view quiz">
+      <div className="quiz-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="pips">
+          {quiz.map((_, i) => (
+            <span
+              key={i}
+              className={
+                "pip" +
+                (i < results.length ? (results[i] ? " pip-ok" : " pip-no") : "") +
+                (i === index ? " pip-now" : "")
+              }
+            />
+          ))}
+        </div>
+        {isPractice && <div className="practice-tag">Practice</div>}
+      </div>
+
+      <div className="timer-track">
+        <div
+          className={"timer-fill" + (timePct < 0.25 ? " timer-low" : "")}
+          style={{ width: `${timePct * 100}%` }}
+        />
+      </div>
+
+      <div className="q-card">
+        <div className="q-cat">{question.category}</div>
+        <div className="q-text">{question.q}</div>
+      </div>
+
+      <div className="options">
+        {question.options.map((opt, i) => {
+          let cls = "opt";
+          if (picked !== null) {
+            if (i === question.correct) cls += " opt-correct";
+            else if (i === picked) cls += " opt-wrong";
+            else cls += " opt-dim";
+          }
+          return (
+            <button key={i} className={cls} onClick={() => choose(i)} disabled={picked !== null}>
+              <span className="opt-letter">{String.fromCharCode(65 + i)}</span>
+              <span className="opt-text">{opt}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ResultsView({ quiz, results, scores, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const total = scores.reduce((a, b) => a + b, 0);
+  const correctCount = results.filter(Boolean).length;
+  const grade = gradeFor(total);
+
+  const share = () => {
+    const grid = results.map((r) => (r ? "🟢" : "⚪")).join("");
+    const lines = [
+      `Quizzly #${puzzleNo} — ${total}/${MAX_SCORE}`,
+      grid,
+      `${correctCount}/${QUIZ_LENGTH} correct${stats.streak > 1 ? ` · 🔥${stats.streak}` : ""}`,
+    ];
+    const text = lines.join("\n");
+    if (navigator.share) {
+      navigator.share({ text }).catch(() => {});
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{grade.emoji}</div>
+        <div className="grade-label">{grade.label}</div>
+      </div>
+
+      <Ring value={total} max={MAX_SCORE} label={total} sub={`of ${MAX_SCORE}`} />
+
+      <div className="result-sub">{correctCount} of {QUIZ_LENGTH} correct</div>
+
+      <div className="review">
+        {quiz.map((q, i) => (
+          <div key={i} className={"review-row" + (results[i] ? " ok" : " no")}>
+            <span className="review-mark">{results[i] ? "✓" : "✕"}</span>
+            <span className="review-q">{q.q}</span>
+            <span className="review-pts">{scores[i] ? `+${scores[i]}` : "0"}</span>
+          </div>
+        ))}
+      </div>
+
+      {!isPractice && (
+        <button className="btn btn-primary" onClick={share}>
+          {copied ? "Copied!" : "Share score"}
+        </button>
+      )}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice round</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. MODALS
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const avg = stats.played ? Math.round(stats.totalScore / stats.played) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.score));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Played</span></div>
+        <div><b>{stats.bestScore}</b><span>Best</span></div>
+        <div><b>{avg}</b><span>Average</span></div>
+        <div><b>{stats.perfect}</b><span>Perfect</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} quizzes</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.score}`}>
+                <div className="bar" style={{ height: `${(h.score / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">
+        Colour themes only — they never change the questions, the timer, or your score.
+      </p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button
+              key={p.id}
+              className={"palette" + (palette === p.id ? " active" : "") + (unlocked ? "" : " locked")}
+              onClick={() => onPick(p.id, unlocked)}
+            >
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">
+        Testing preview — unlocks are free for now and will connect to real purchases at launch.
+      </div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "quizzly",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(
+        Object.values(K).map((key) => [key, localStorage.getItem(key)]).filter(([, v]) => v !== null)
+      ),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quizzly-backup-${dateKey()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "quizzly" || !parsed.data) {
+          setMsg("That file isn't a Quizzly backup.");
+          return;
+        }
+        Object.entries(parsed.data).forEach(([key, value]) => {
+          if (typeof value === "string") localStorage.setItem(key, value);
+        });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) {
+        setMsg("Couldn't read that file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">
+        Your scores live only on this device. Export a copy before switching phones — free, always.
+      </p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. APP
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "light");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "honey");
+  const [pro, setPro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [quiz, setQuiz] = useState(null);
+  const [lastRun, setLastRun] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    if (todayEntry) {
+      setQuiz(buildQuiz(today));
+      setLastRun({ results: todayEntry.results, scores: todayEntry.scores });
+      setPractice(false);
+      setScreen("results");
+      return;
+    }
+    setQuiz(buildQuiz(today));
+    setPractice(false);
+    setScreen("quiz");
+  };
+
+  const startPractice = () => {
+    setQuiz(buildQuiz(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("quiz");
+  };
+
+  const finish = (results, scores) => {
+    const total = scores.reduce((a, b) => a + b, 0);
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: { results, scores, score: total } }));
+      setStats((s) => recordResult(s, today, total, results));
+    }
+    setLastRun({ results, scores });
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Quizzly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button
+            className="icon-btn"
+            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            aria-label="Toggle theme"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+        />
+      )}
+
+      {screen === "quiz" && quiz && (
+        <QuizView quiz={quiz} onDone={finish} isPractice={practice} onQuit={() => setScreen("home")} />
+      )}
+
+      {screen === "results" && quiz && lastRun && (
+        <ResultsView
+          quiz={quiz}
+          results={lastRun.results}
+          scores={lastRun.scores}
+          stats={stats}
+          isPractice={practice}
+          puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")}
+          onPractice={startPractice}
+        />
+      )}
+
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && (
+        <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />
+      )}
+      {modal === "backup" && (
+        <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

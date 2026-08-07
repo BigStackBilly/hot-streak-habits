@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Quadly</title>
+<meta name="theme-color" content="#6c7bd9" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Quadly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// QUADLY — find the four groups of four, once a day
+//
+// Sixteen words hide four themed groups. Pick four, submit, and find all
+// four groups before you run out of lives.
+//
+// Same conventions as the sibling apps: local-first, zero login, zero
+// backend, inline Babel so it runs straight from a file:// URL.
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ---------------------------------------------------------------------
+// Puzzle bank. Groups are ordered easiest → hardest inside each puzzle,
+// which is what drives the difficulty colour when a group is solved.
+// ---------------------------------------------------------------------
+const PUZZLES = [
+  [["Planets", ["MARS", "VENUS", "SATURN", "MERCURY"]], ["Chocolate bars", ["TWIX", "FLAKE", "AERO", "BOUNTY"]], ["Roman gods", ["JUNO", "VULCAN", "CERES", "JANUS"]], ["___ Rover", ["RANGE", "LAND", "MOON", "DISCOVERY"]]],
+  [["Card games", ["BRIDGE", "HEARTS", "RUMMY", "POKER"]], ["Body parts", ["SPADE", "CLUB", "PALM", "SOLE"]], ["London landmarks", ["TOWER", "SHARD", "GHERKIN", "EYE"]], ["Types of bridge", ["SUSPENSION", "ARCH", "TRUSS", "BEAM"]]],
+  [["Coffee drinks", ["LATTE", "MOCHA", "FLAT", "CORTADO"]], ["Shades of brown", ["TAN", "UMBER", "SEPIA", "CHESTNUT"]], ["Horse colours", ["BAY", "ROAN", "PALOMINO", "DUN"]], ["___ White", ["SNOW", "EGG", "OFF", "BONE"]]],
+  [["Big cats", ["LION", "TIGER", "JAGUAR", "LEOPARD"]], ["Car models", ["MUSTANG", "VIPER", "BEETLE", "CORSA"]], ["Insects", ["MANTIS", "CRICKET", "APHID", "EARWIG"]], ["Sports", ["RUGBY", "POLO", "CURLING", "NETBALL"]]],
+  [["Pasta shapes", ["PENNE", "FUSILLI", "RIGATONI", "ORZO"]], ["Italian cities", ["MILAN", "TURIN", "GENOA", "VERONA"]], ["Opera terms", ["ARIA", "TENOR", "LIBRETTO", "SOPRANO"]], ["___ Sauce", ["SOY", "HOT", "FISH", "APPLE"]]],
+  [["Chess pieces", ["ROOK", "BISHOP", "KNIGHT", "PAWN"]], ["Birds", ["RAVEN", "MARTIN", "SWIFT", "WREN"]], ["Famous Georges", ["ORWELL", "CLOONEY", "HARRISON", "LUCAS"]], ["Quick", ["RAPID", "FLEET", "BRISK", "HASTY"]]],
+  [["Weather", ["HAIL", "SLEET", "FROST", "GALE"]], ["Greet", ["WELCOME", "SALUTE", "ADDRESS", "ACCOST"]], ["Poets", ["KEATS", "PLATH", "BLAKE", "DONNE"]], ["Types of wind", ["MISTRAL", "MONSOON", "CHINOOK", "SIROCCO"]]],
+  [["Tree types", ["ASH", "ELM", "BIRCH", "ALDER"]], ["Residue", ["SOOT", "CINDER", "EMBER", "SLAG"]], ["Street ___", ["SMART", "LIGHT", "FOOD", "ART"]], ["Board games", ["RISK", "CLUEDO", "SORRY", "TROUBLE"]]],
+  [["Ocean features", ["REEF", "TRENCH", "ATOLL", "SHELF"]], ["Sailing terms", ["TACK", "JIB", "HELM", "BOOM"]], ["Bookcase parts", ["SPINE", "PANEL", "BRACKET", "LEDGE"]], ["Body of water", ["GULF", "STRAIT", "SOUND", "BAY"]]],
+  [["Musical keys", ["MAJOR", "MINOR", "SHARP", "FLAT"]], ["Military ranks", ["CAPTAIN", "COLONEL", "SERGEANT", "CORPORAL"]], ["Apartment (UK)", ["STUDIO", "MAISONETTE", "BEDSIT", "DUPLEX"]], ["Clever", ["KEEN", "ASTUTE", "SHREWD", "CANNY"]]],
+  [["Egyptian gods", ["RA", "ISIS", "OSIRIS", "ANUBIS"]], ["Rivers", ["NILE", "AMAZON", "DANUBE", "VOLGA"]], ["Online retailers", ["ETSY", "EBAY", "ASOS", "ZALANDO"]], ["Pyramid ___", ["SCHEME", "STAGE", "SELLING", "TEXT"]]],
+  [["Knitting terms", ["PURL", "CAST", "SKEIN", "GAUGE"]], ["Theatre people", ["USHER", "CREW", "UNDERSTUDY", "PROMPT"]], ["Measure", ["METER", "SCALE", "INDEX", "RULER"]], ["R&B singers", ["MONICA", "BRANDY", "AALIYAH", "GINUWINE"]]],
+  [["Dances", ["SALSA", "TANGO", "WALTZ", "RUMBA"]], ["Dips", ["HUMMUS", "GUACAMOLE", "TZATZIKI", "AIOLI"]], ["NATO alphabet", ["FOXTROT", "ROMEO", "SIERRA", "KILO"]], ["Mountain ranges", ["ANDES", "ATLAS", "ROCKIES", "URALS"]]],
+  [["Types of pepper", ["BELL", "GHOST", "CAYENNE", "HABANERO"]], ["Ring", ["CIRCLE", "HOOP", "BAND", "LOOP"]], ["Spooky", ["PHANTOM", "SPECTRE", "WRAITH", "SHADE"]], ["Bond films", ["SKYFALL", "GOLDENEYE", "THUNDERBALL", "MOONRAKER"]]],
+  [["Card suits", ["HEART", "SPADE", "CLUB", "DIAMOND"]], ["Baseball", ["PITCHER", "BUNT", "INNING", "DUGOUT"]], ["Garden tools", ["HOE", "TROWEL", "RAKE", "DIBBER"]], ["Nightspot", ["LOUNGE", "BAR", "DISCO", "TAVERN"]]],
+  [["Shades of blue", ["NAVY", "AZURE", "COBALT", "TEAL"]], ["Armed forces", ["ARMY", "MARINES", "AIRFORCE", "CAVALRY"]], ["Ducks", ["MALLARD", "EIDER", "WIGEON", "PINTAIL"]], ["___ Seal", ["WAX", "HARBOR", "RUBBER", "GREAT"]]],
+  [["Pizza toppings", ["OLIVE", "BASIL", "CAPER", "ANCHOVY"]], ["Fawlty Towers", ["SYBIL", "MANUEL", "POLLY", "TERRY"]], ["Green shades", ["LIME", "SAGE", "JADE", "MOSS"]], ["Herbs", ["THYME", "DILL", "CHIVE", "TARRAGON"]]],
+  [["Types of bear", ["POLAR", "BROWN", "SLOTH", "PANDA"]], ["Opposite", ["INVERSE", "REVERSE", "CONTRARY", "ANTONYM"]], ["Slow animals", ["SNAIL", "TORTOISE", "KOALA", "SLUG"]], ["Deadly sins", ["GREED", "PRIDE", "ENVY", "WRATH"]]],
+  [["Kitchen units", ["CUP", "PINT", "OUNCE", "QUART"]], ["Trophies", ["SHIELD", "PLATE", "MEDAL", "URN"]], ["Tableware", ["BOWL", "SAUCER", "TUREEN", "PLATTER"]], ["Cricket terms", ["OVER", "WICKET", "CREASE", "INNINGS"]]],
+  [["Fabric types", ["DENIM", "LINEN", "TWEED", "VELVET"]], ["Underground", ["TUBE", "METRO", "SUBWAY", "UNDERGROUND"]], ["Sandwich chains", ["PRET", "GREGGS", "QUIZNOS", "BLIMPIE"]], ["TV parts", ["SCREEN", "AERIAL", "REMOTE", "BEZEL"]]],
+  [["Types of code", ["MORSE", "BINARY", "CIPHER", "ZIP"]], ["Fasteners", ["SNAP", "BUTTON", "VELCRO", "CLASP"]], ["Photograph", ["SHOT", "CAPTURE", "FRAME", "STILL"]], ["Picture edges", ["BORDER", "MOUNT", "MAT", "SURROUND"]]],
+  [["Constellations", ["ORION", "LYRA", "DRACO", "CYGNUS"]], ["Harry Potter", ["SIRIUS", "REMUS", "MINERVA", "SEVERUS"]], ["Roman goddesses", ["DIANA", "FLORA", "VESTA", "BELLONA"]], ["Bright stars", ["VEGA", "RIGEL", "ALTAIR", "DENEB"]]],
+  [["Bread types", ["RYE", "PITA", "NAAN", "BRIOCHE"]], ["Whiskey types", ["BOURBON", "SCOTCH", "MALT", "BLEND"]], ["Adhesive tape", ["DUCT", "MASKING", "WASHI", "GAFFER"]], ["Beer ingredients", ["HOPS", "YEAST", "BARLEY", "WATER"]]],
+  [["Types of pen", ["QUILL", "BIRO", "FOUNTAIN", "MARKER"]], ["Water features", ["POND", "CASCADE", "SPRING", "WEIR"]], ["Seasons", ["SUMMER", "AUTUMN", "WINTER", "MONSOON"]], ["Coiled things", ["SPIRAL", "COIL", "HELIX", "CORKSCREW"]]],
+  [["Currencies", ["POUND", "YEN", "RAND", "PESO"]], ["Animal shelter", ["KENNEL", "PEN", "HUTCH", "STABLE"]], ["Longing", ["CRAVING", "ACHE", "THIRST", "HANKERING"]], ["Writing tools", ["PENCIL", "CHALK", "CRAYON", "STYLUS"]]],
+  [["Types of nut", ["PECAN", "CASHEW", "MACADAMIA", "PISTACHIO"]], ["Bolt partners", ["NUT", "WASHER", "SCREW", "RIVET"]], ["Laundry items", ["DRYER", "IRON", "BASKET", "HAMPER"]], ["Golf terms", ["BIRDIE", "BOGEY", "PUTT", "EAGLE"]]],
+  [["Cheese types", ["BRIE", "GOUDA", "FETA", "STILTON"]], ["Greek letters", ["BETA", "DELTA", "SIGMA", "OMEGA"]], ["Airlines", ["EMIRATES", "QANTAS", "RYANAIR", "LUFTHANSA"]], ["Watch brands", ["ROLEX", "SEIKO", "TISSOT", "CASIO"]]],
+  [["Dog breeds", ["BOXER", "PUG", "BEAGLE", "COLLIE"]], ["Fighters", ["WRESTLER", "FENCER", "JUDOKA", "BRAWLER"]], ["Barriers", ["FENCE", "WALL", "HEDGE", "RAILING"]], ["Peanuts characters", ["LINUS", "LUCY", "SCHROEDER", "MARCIE"]]],
+  [["Volcano parts", ["CRATER", "MAGMA", "VENT", "CALDERA"]], ["Air outlets", ["DUCT", "FLUE", "GRILLE", "LOUVRE"]], ["Express", ["UTTER", "VOICE", "AIR", "CONVEY"]], ["BBQ equipment", ["BRAZIER", "TONGS", "SKEWER", "CHARCOAL"]]],
+  [["Shades of red", ["CRIMSON", "SCARLET", "RUBY", "CARMINE"]], ["Gemstones", ["OPAL", "TOPAZ", "GARNET", "JASPER"]], ["Programming languages", ["PYTHON", "RUST", "SWIFT", "KOTLIN"]], ["Snakes", ["COBRA", "VIPER", "MAMBA", "ADDER"]]],
+];
+
+const LIVES = 4;
+const MAX_SCORE = 1000;
+const POINTS_PER_GROUP = 250;
+const MISTAKE_PENALTY = 100;
+const DIFFICULTY = ["easy", "medium", "hard", "tricky"];
+
+// ---------------------------------------------------------------------
+// Seeded randomness
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - EPOCH) / 86400000) + 1);
+}
+
+function buildBoard(seedKey) {
+  const seed = hashString(seedKey);
+  const rand = mulberry32(seed);
+  const puzzle = PUZZLES[Math.floor(rand() * PUZZLES.length)];
+
+  // Tiles carry their own id rather than being keyed by word, so tile
+  // identity never depends on the words being unique across groups.
+  const tiles = [];
+  puzzle.forEach(([theme, words], groupIndex) => {
+    words.forEach((w, wordIndex) => tiles.push({ id: `${groupIndex}-${wordIndex}`, word: w, group: groupIndex }));
+  });
+
+  // Fisher-Yates so the sixteen tiles aren't in group order.
+  for (let i = tiles.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+  }
+
+  return { puzzle, tiles };
+}
+
+// ---------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------
+const K = {
+  stats: "quadly:stats",
+  daily: "quadly:daily",
+  theme: "quadly:theme",
+  pro: "quadly:pro",
+  palette: "quadly:palette",
+  owned: "quadly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+const EMPTY_STATS = {
+  played: 0, solved: 0, totalScore: 0, bestScore: 0, flawless: 0,
+  streak: 0, maxStreak: 0, lastPlayed: null, history: [],
+};
+
+function recordResult(stats, key, score, won, mistakes) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.bestScore = Math.max(next.bestScore, score);
+  if (won) next.solved += 1;
+  if (won && mistakes === 0) next.flawless += 1;
+
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* replay */ }
+  else next.streak = 1;
+
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score }].slice(-60);
+  return next;
+}
+
+const PALETTES = [
+  { id: "indigo", name: "Indigo", free: true, accent: "#6c7bd9", accent2: "#9a63c9" },
+  { id: "coral", name: "Coral", free: false, accent: "#e8705c", accent2: "#d9526f" },
+  { id: "forest", name: "Forest", free: false, accent: "#4d9e6a", accent2: "#3a8f8a" },
+  { id: "slate", name: "Slate", free: false, accent: "#6b7f96", accent2: "#4f6480" },
+];
+
+// ---------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup }) {
+  const rate = stats.played ? Math.round((stats.solved / stats.played) * 100) : 0;
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">
+          <span /><span /><span /><span />
+        </div>
+        <h1 className="hero-title">Quadly</h1>
+        <p className="hero-sub">Sixteen words. Four hidden groups. One puzzle a day.</p>
+      </div>
+
+      {stats.streak > 0 && <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}<span className="done-max">/{MAX_SCORE}</span></div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Play today's puzzle</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Played</div></div>
+        <div className="stat-cell"><div className="stat-num">{rate}%</div><div className="stat-cap">Solved</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestScore}</div><div className="stat-cap">Best</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+function BoardView({ board, isPractice, onDone, onQuit }) {
+  const { puzzle, tiles } = board;
+  const [selected, setSelected] = useState([]);
+  const [solved, setSolved] = useState([]);       // group indices, in solve order
+  const [mistakes, setMistakes] = useState(0);
+  const [guesses, setGuesses] = useState([]);      // rows of group-indices, for the share grid
+  const [shake, setShake] = useState(false);
+  const [toast, setToast] = useState("");
+  const busyRef = useRef(false);
+
+  const remaining = tiles.filter((t) => !solved.includes(t.group));
+
+  const toggle = (id) => {
+    if (busyRef.current) return;
+    setSelected((s) => {
+      if (s.includes(id)) return s.filter((x) => x !== id);
+      if (s.length >= 4) return s;
+      return [...s, id];
+    });
+  };
+
+  const flash = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 1500);
+  };
+
+  const submit = () => {
+    if (busyRef.current || selected.length !== 4) return;
+    busyRef.current = true;
+
+    const picked = selected.map((id) => tiles.find((t) => t.id === id));
+    const groups = picked.map((t) => t.group);
+    const first = groups[0];
+    const allSame = groups.every((g) => g === first);
+    const nextGuesses = [...guesses, groups];
+    setGuesses(nextGuesses);
+
+    if (allSame) {
+      const nextSolved = [...solved, first];
+      setSolved(nextSolved);
+      setSelected([]);
+      if (nextSolved.length === 4) {
+        const score = Math.max(0, 4 * POINTS_PER_GROUP - mistakes * MISTAKE_PENALTY);
+        setTimeout(() => onDone({ won: true, score, mistakes, solved: nextSolved, guesses: nextGuesses }), 900);
+        return;
+      }
+      busyRef.current = false;
+      return;
+    }
+
+    // Near-miss feedback: three of four from one group is worth calling out.
+    const counts = {};
+    groups.forEach((g) => { counts[g] = (counts[g] || 0) + 1; });
+    if (Math.max(...Object.values(counts)) === 3) flash("One away…");
+
+    const nextMistakes = mistakes + 1;
+    setMistakes(nextMistakes);
+    setShake(true);
+    setTimeout(() => setShake(false), 480);
+
+    if (nextMistakes >= LIVES) {
+      setTimeout(() => {
+        const score = Math.max(0, solved.length * POINTS_PER_GROUP - nextMistakes * MISTAKE_PENALTY);
+        onDone({ won: false, score, mistakes: nextMistakes, solved, guesses: nextGuesses });
+      }, 900);
+      return;
+    }
+
+    setTimeout(() => { setSelected([]); busyRef.current = false; }, 500);
+  };
+
+  return (
+    <div className="view board-view">
+      <div className="board-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="lives">
+          {Array.from({ length: LIVES }).map((_, i) => (
+            <span key={i} className={"life" + (i < LIVES - mistakes ? "" : " lost")} />
+          ))}
+        </div>
+        {isPractice && <div className="practice-tag">Practice</div>}
+      </div>
+
+      <div className="solved-stack">
+        {solved.map((g) => (
+          <div key={g} className={`solved-band band-${DIFFICULTY[g]}`}>
+            <div className="band-theme">{puzzle[g][0]}</div>
+            <div className="band-words">{puzzle[g][1].join(" · ")}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className={"grid" + (shake ? " shake" : "")}>
+        {remaining.map((t) => (
+          <button
+            key={t.id}
+            className={"tile" + (selected.includes(t.id) ? " picked" : "")}
+            onClick={() => toggle(t.id)}
+          >
+            {t.word}
+          </button>
+        ))}
+      </div>
+
+      {toast && <div className="toast">{toast}</div>}
+
+      <div className="board-actions">
+        <button className="btn btn-ghost" onClick={() => setSelected([])} disabled={!selected.length}>Clear</button>
+        <button className="btn btn-primary" onClick={submit} disabled={selected.length !== 4}>Submit</button>
+      </div>
+    </div>
+  );
+}
+
+function ResultsView({ board, result, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const { puzzle } = board;
+  const SQUARES = { easy: "🟨", medium: "🟩", hard: "🟦", tricky: "🟪" };
+
+  const share = () => {
+    const grid = result.guesses
+      .map((row) => row.map((g) => SQUARES[DIFFICULTY[g]]).join(""))
+      .join("\n");
+    const text = [
+      `Quadly #${puzzleNo} — ${result.score}/${MAX_SCORE}`,
+      grid,
+      result.won ? (result.mistakes === 0 ? "Flawless ✨" : `${result.mistakes} mistake${result.mistakes === 1 ? "" : "s"}`) : "Ran out of lives",
+      stats.streak > 1 ? `🔥 ${stats.streak}` : "",
+    ].filter(Boolean).join("\n");
+
+    if (navigator.share) navigator.share({ text }).catch(() => {});
+    else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{result.won ? (result.mistakes === 0 ? "✨" : "🎉") : "😅"}</div>
+        <div className="grade-label">
+          {result.won ? (result.mistakes === 0 ? "Flawless" : "Solved") : "Out of lives"}
+        </div>
+        <div className="result-score">{result.score}<span className="done-max">/{MAX_SCORE}</span></div>
+      </div>
+
+      <div className="solved-stack full">
+        {puzzle.map(([theme, words], g) => (
+          <div key={g} className={`solved-band band-${DIFFICULTY[g]}` + (result.solved.includes(g) ? "" : " missed")}>
+            <div className="band-theme">{theme}</div>
+            <div className="band-words">{words.join(" · ")}</div>
+          </div>
+        ))}
+      </div>
+
+      {!isPractice && (
+        <button className="btn btn-primary" onClick={share}>{copied ? "Copied!" : "Share result"}</button>
+      )}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const rate = stats.played ? Math.round((stats.solved / stats.played) * 100) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.score));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Played</span></div>
+        <div><b>{rate}%</b><span>Solved</span></div>
+        <div><b>{stats.bestScore}</b><span>Best</span></div>
+        <div><b>{stats.flawless}</b><span>Flawless</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} puzzles</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.score}`}>
+                <div className="bar" style={{ height: `${(h.score / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">Colour themes only — they never change the puzzles, the lives, or your score.</p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button
+              key={p.id}
+              className={"palette" + (palette === p.id ? " active" : "") + (unlocked ? "" : " locked")}
+              onClick={() => onPick(p.id, unlocked)}
+            >
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "quadly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(
+        Object.values(K).map((key) => [key, localStorage.getItem(key)]).filter(([, v]) => v !== null)
+      ),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quadly-backup-${dateKey()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "quadly" || !parsed.data) { setMsg("That file isn't a Quadly backup."); return; }
+        Object.entries(parsed.data).forEach(([key, value]) => {
+          if (typeof value === "string") localStorage.setItem(key, value);
+        });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your results live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "light");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "indigo");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [board, setBoard] = useState(null);
+  const [result, setResult] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    const b = buildBoard(today);
+    setBoard(b);
+    setPractice(false);
+    if (todayEntry) { setResult(todayEntry); setScreen("results"); }
+    else setScreen("board");
+  };
+
+  const startPractice = () => {
+    setBoard(buildBoard(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("board");
+  };
+
+  const finish = (r) => {
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: r }));
+      setStats((s) => recordResult(s, today, r.score, r.won, r.mistakes));
+    }
+    setResult(r);
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Quadly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+        />
+      )}
+
+      {screen === "board" && board && (
+        <BoardView board={board} isPractice={practice} onDone={finish} onQuit={() => setScreen("home")} />
+      )}
+
+      {screen === "results" && board && result && (
+        <ResultsView
+          board={board}
+          result={result}
+          stats={stats}
+          isPractice={practice}
+          puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")}
+          onPractice={startPractice}
+        />
+      )}
+
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
