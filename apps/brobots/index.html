@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Brobots</title>
+<meta name="theme-color" content="#3B82F6" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this family uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Brobots" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// BROBOTS — a small local-first drop-and-merge puzzle game
+//
+// Sibling app to Hot Streak Habits / Fuseday / Thirsty Leaves / etc,
+// same house style: lives inline in index.html so it can be opened
+// directly as a file:// URL with zero build step. Unlike Fuseday (a
+// swipe-to-merge grid game, closer to 2048), Brobots is a physics drop
+// game in the "Suika/watermelon game" family: aim, release, and two
+// same-tier robots that touch fuse into the next tier up. The screen
+// filling up past the danger line ends the run.
+//
+// Organized top to bottom as:
+//   1. Tiers & palettes     - the 8 robot sizes/colors, free + Pro packs
+//   2. Physics engine        - plain functions, no React, no canvas —
+//                              operates on a plain array of robot objects
+//   3. Canvas rendering      - draws the physics state to a <canvas>
+//   4. localStorage helpers  - high score, pro, theme, palette
+//   5. Small components (Confetti, UpgradeModal, BackupModal, GameOverModal)
+//   6. GameCanvas             - owns the animation loop + pointer input
+//   7. App                    - top-level state + layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const HIGHSCORE_KEY = "brobots.highscore.v1";
+const THEME_KEY = "brobots.theme.v1";
+const PRO_KEY = "brobots.pro.v1";
+const PACK_KEY = "brobots.pack.v1";
+const PRO_PRICE = "$3.99";
+
+// ---------------------------------------------------------------------
+// 1. TIERS & PALETTES
+//
+// A robot's "tier" (1-8) is the only thing that determines its size and
+// merge behavior — two robots merge exactly when they touch and share a
+// tier, producing one robot of tier+1 at their midpoint. Tier 8
+// ("Omegabot") is the ceiling: it collides like everything else but
+// never merges further, since there's nothing bigger to become.
+// ---------------------------------------------------------------------
+
+const TIERS = [
+  { name: "Nanobot", r: 15 },
+  { name: "Microbot", r: 21 },
+  { name: "Boltbot", r: 28 },
+  { name: "Gearbot", r: 36 },
+  { name: "Turbobot", r: 45 },
+  { name: "Titanbot", r: 55 },
+  { name: "Mechabot", r: 66 },
+  { name: "Omegabot", r: 78 },
+];
+const MAX_TIER = TIERS.length;
+
+// Points awarded for the NEW tier produced by a merge (tier 1 never
+// results from a merge, so it has no entry).
+const POINTS_BY_TIER = { 2: 20, 3: 50, 4: 90, 5: 140, 6: 200, 7: 270, 8: 350 };
+
+// Spawn pool skews toward small tiers so the arena doesn't fill instantly.
+const SPAWN_POOL = [1, 1, 1, 2, 2, 3];
+
+// Cosmetic color packs — purely visual, same [light, dark] gradient pair
+// per tier used to fill each robot on canvas. "Chrome" is the free
+// default; the rest are Pro re-skins, same philosophy as Fuseday's tile
+// color packs (Neon/Pastel/Wood/Midnight): no logic changes, just color.
+const PALETTES = {
+  chrome: {
+    name: "Chrome", free: true,
+    colors: [
+      ["#B7C2D6", "#64748B"], ["#7DB2FB", "#2563EB"], ["#6EE7B7", "#059669"],
+      ["#FCD34D", "#D97706"], ["#FDBA74", "#EA580C"], ["#FCA5A5", "#DC2626"],
+      ["#D8B4FE", "#9333EA"], ["#F9A8D4", "#DB2777"],
+    ],
+  },
+  neon: {
+    name: "Neon", price: "$1.99",
+    colors: [
+      ["#67E8F9", "#0891B2"], ["#93C5FD", "#1D4ED8"], ["#BEF264", "#65A30D"],
+      ["#FDE047", "#CA8A04"], ["#FDBA74", "#C2410C"], ["#FB7185", "#BE123C"],
+      ["#E879F9", "#A21CAF"], ["#F472B6", "#BE185D"],
+    ],
+  },
+  sunset: {
+    name: "Sunset", price: "$1.99",
+    colors: [
+      ["#FDE68A", "#B45309"], ["#FCD34D", "#C2721A"], ["#FDBA74", "#C2410C"],
+      ["#FCA5A5", "#B91C1C"], ["#FDA4AF", "#9F1239"], ["#F0ABFC", "#86198F"],
+      ["#C4B5FD", "#5B21B6"], ["#A5B4FC", "#3730A3"],
+    ],
+  },
+  galaxy: {
+    name: "Galaxy", price: "$1.99",
+    colors: [
+      ["#94A3B8", "#334155"], ["#7DD3FC", "#0369A1"], ["#67E8F9", "#155E75"],
+      ["#A5B4FC", "#3730A3"], ["#C4B5FD", "#5B21B6"], ["#D8B4FE", "#6B21A8"],
+      ["#F0ABFC", "#86198F"], ["#F9A8D4", "#9D174D"],
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------
+// 2. PHYSICS ENGINE
+//
+// Deliberately not a general-purpose physics library — just enough of a
+// custom kernel (gravity, wall/floor bounce, pairwise circle collision
+// with positional correction + a little restitution, same-tier merge)
+// to make dropped robots settle believably. Runs on a plain array of
+// mutable robot objects; nothing here touches React or the canvas.
+// ---------------------------------------------------------------------
+
+const GRAVITY = 1600;
+const WALL_RESTITUTION = 0.26;
+const FLOOR_RESTITUTION = 0.14;
+const COLLISION_RESTITUTION = 0.10;
+const FLOOR_FRICTION = 0.90;
+const DANGER_LINE_RATIO = 0.16; // fraction of arena height, from the top
+const GAME_OVER_HOLD_SECONDS = 1.4;
+
+let nextRobotId = 1;
+function createRobot(tier, x, y) {
+  return { id: nextRobotId++, tier, x, y, vx: 0, vy: 0, r: TIERS[tier - 1].r, settled: false, flash: 0 };
+}
+
+function randomSpawnTier() {
+  return SPAWN_POOL[Math.floor(Math.random() * SPAWN_POOL.length)];
+}
+
+// Advances the simulation by `dt` seconds. Mutates `robots` in place
+// (removing merged pairs, appending newly-created ones) and returns
+// { pointsEarned, mergedAnyTierMax } for the caller to react to.
+function stepPhysics(robots, dt, arenaWidth, arenaHeight) {
+  for (const bot of robots) {
+    bot.vy += GRAVITY * dt;
+    bot.x += bot.vx * dt;
+    bot.y += bot.vy * dt;
+    if (bot.flash > 0) bot.flash = Math.max(0, bot.flash - dt * 3);
+
+    if (bot.x - bot.r < 0) {
+      bot.x = bot.r;
+      bot.vx = -bot.vx * WALL_RESTITUTION;
+      bot.settled = true;
+    } else if (bot.x + bot.r > arenaWidth) {
+      bot.x = arenaWidth - bot.r;
+      bot.vx = -bot.vx * WALL_RESTITUTION;
+      bot.settled = true;
+    }
+
+    if (bot.y + bot.r > arenaHeight) {
+      bot.y = arenaHeight - bot.r;
+      bot.vy = -bot.vy * FLOOR_RESTITUTION;
+      bot.vx *= FLOOR_FRICTION;
+      bot.settled = true;
+    }
+  }
+
+  const toRemove = new Set();
+  const merges = []; // { tier, x, y }
+
+  for (let i = 0; i < robots.length; i++) {
+    const a = robots[i];
+    if (toRemove.has(a.id)) continue;
+    for (let j = i + 1; j < robots.length; j++) {
+      const b = robots[j];
+      if (toRemove.has(b.id)) continue;
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.0001;
+      const minDist = a.r + b.r;
+      if (dist >= minDist) continue;
+
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      if (a.tier === b.tier && a.tier < MAX_TIER) {
+        toRemove.add(a.id);
+        toRemove.add(b.id);
+        merges.push({ tier: a.tier + 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        // `a` is now consumed by this merge -- stop pairing it against any
+        // further j's this frame. Without this break, three-plus mutually
+        // touching same-tier robots could let `a` merge twice in one frame
+        // (once per surviving neighbor), silently duplicating mass/score.
+        break;
+      }
+
+      // Positional correction: push the pair apart along the contact
+      // normal, split evenly, so overlapping circles don't sink into
+      // each other frame after frame.
+      const overlap = minDist - dist;
+      a.x -= nx * overlap * 0.5;
+      a.y -= ny * overlap * 0.5;
+      b.x += nx * overlap * 0.5;
+      b.y += ny * overlap * 0.5;
+
+      // A small velocity response along the normal (not a full rigid
+      // body solver — just enough to feel like a bounce instead of
+      // circles silently teleporting apart).
+      const rvx = b.vx - a.vx;
+      const rvy = b.vy - a.vy;
+      const closingSpeed = rvx * nx + rvy * ny;
+      if (closingSpeed < 0) {
+        const impulse = -closingSpeed * (1 + COLLISION_RESTITUTION) * 0.5;
+        a.vx -= impulse * nx;
+        a.vy -= impulse * ny;
+        b.vx += impulse * nx;
+        b.vy += impulse * ny;
+      }
+      a.settled = true;
+      b.settled = true;
+    }
+  }
+
+  let pointsEarned = 0;
+  if (toRemove.size > 0) {
+    for (let i = robots.length - 1; i >= 0; i--) {
+      if (toRemove.has(robots[i].id)) robots.splice(i, 1);
+    }
+    for (const m of merges) {
+      const bot = createRobot(m.tier, m.x, m.y);
+      bot.vy = -60;
+      bot.flash = 1;
+      bot.settled = true;
+      robots.push(bot);
+      pointsEarned += POINTS_BY_TIER[m.tier] || 0;
+    }
+  }
+
+  return { pointsEarned, mergeCount: merges.length };
+}
+
+// ---------------------------------------------------------------------
+// 3. CANVAS RENDERING
+// ---------------------------------------------------------------------
+
+function drawRobot(ctx, bot, palette) {
+  const [light, dark] = palette.colors[bot.tier - 1];
+  const grad = ctx.createRadialGradient(
+    bot.x - bot.r * 0.3, bot.y - bot.r * 0.3, bot.r * 0.1,
+    bot.x, bot.y, bot.r
+  );
+  grad.addColorStop(0, light);
+  grad.addColorStop(1, dark);
+
+  ctx.beginPath();
+  ctx.arc(bot.x, bot.y, bot.r, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  if (bot.flash > 0) {
+    ctx.beginPath();
+    ctx.arc(bot.x, bot.y, bot.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${bot.flash * 0.55})`;
+    ctx.fill();
+  }
+
+  ctx.lineWidth = Math.max(1, bot.r * 0.05);
+  ctx.strokeStyle = "rgba(20,25,40,0.25)";
+  ctx.stroke();
+
+  // face: two eyes, scaled to the robot's radius
+  const eyeR = bot.r * 0.16;
+  const eyeOffset = bot.r * 0.34;
+  ctx.fillStyle = "rgba(15,23,42,0.75)";
+  ctx.beginPath();
+  ctx.arc(bot.x - eyeOffset, bot.y - bot.r * 0.05, eyeR, 0, Math.PI * 2);
+  ctx.arc(bot.x + eyeOffset, bot.y - bot.r * 0.05, eyeR, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function renderFrame(ctx, robots, arenaWidth, arenaHeight, palette, dangerLineY, showDanger) {
+  ctx.clearRect(0, 0, arenaWidth, arenaHeight);
+
+  if (showDanger) {
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = "rgba(239, 68, 68, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, dangerLineY);
+    ctx.lineTo(arenaWidth, dangerLineY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  for (const bot of robots) drawRobot(ctx, bot, palette);
+}
+
+// ---------------------------------------------------------------------
+// 4. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadHighScore() {
+  return Number(localStorage.getItem(HIGHSCORE_KEY)) || 0;
+}
+function saveHighScore(score) {
+  localStorage.setItem(HIGHSCORE_KEY, String(score));
+}
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) || "light";
+}
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+function savePro(pro) {
+  localStorage.setItem(PRO_KEY, JSON.stringify(pro));
+}
+function loadPack() {
+  return localStorage.getItem(PACK_KEY) || "chrome";
+}
+function savePack(id) {
+  localStorage.setItem(PACK_KEY, id);
+}
+
+function playPop(tier) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 300 + tier * 60;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.22);
+  } catch {}
+}
+
+function playGameOver() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.14, 0.28].forEach((startAt, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sawtooth";
+      osc.frequency.value = 260 - i * 50;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + startAt);
+      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startAt + 0.3);
+      osc.start(ctx.currentTime + startAt);
+      osc.stop(ctx.currentTime + startAt + 0.3);
+    });
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 5. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function Confetti() {
+  const colors = ["#3B82F6", "#8B5CF6", "#22D3EE", "#F472B6", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: colors[i % colors.length],
+    delay: Math.random() * 0.3,
+    duration: 1.4 + Math.random() * 0.8,
+  }));
+  return (
+    <>
+      {pieces.map((p) => (
+        <div
+          key={p.id}
+          className="confetti-piece"
+          style={{ left: `${p.left}%`, background: p.color, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s` }}
+        />
+      ))}
+    </>
+  );
+}
+
+function UpgradeModal({ pro, pack, onPurchase, onSelectPack, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Brobots Pro</h2>
+
+        {pro.owned ? (
+          <>
+            <p className="upgrade-copy">✓ Pro is unlocked on this device — thanks for supporting the app! Pick any robot color pack:</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <button key={id} type="button" className={`pack-option ${pack === id ? "selected" : ""}`} onClick={() => onSelectPack(id)}>
+                  <div className="pack-swatch">
+                    {p.colors.slice(0, 4).map((c, i) => (
+                      <span key={i} style={{ background: c[0] }} />
+                    ))}
+                  </div>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            <div className="modal-buttons" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">Unlock Pro for 3 extra robot color packs — Neon, Sunset, and Galaxy. Purely cosmetic, never required to play.</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <div key={id} className={`pack-option ${p.free ? "" : "locked"}`}>
+                  <div className="pack-swatch">
+                    {p.colors.slice(0, 4).map((c, i) => (
+                      <span key={i} style={{ background: c[0] }} />
+                    ))}
+                  </div>
+                  {p.name}{!p.free && " 🔒"}
+                </div>
+              ))}
+            </div>
+            <div className="modal-buttons-column" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onPurchase}>Unlock Pro — {PRO_PRICE}</button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const BACKUP_KEYS = [HIGHSCORE_KEY, THEME_KEY, PRO_KEY, PACK_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+    const payload = { app: "brobots", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `brobots-backup.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+      if (!parsed || parsed.app !== "brobots" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Brobots backup file." });
+        return;
+      }
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+      Object.keys(parsed.data).forEach((key) => localStorage.setItem(key, parsed.data[key]));
+      window.location.reload();
+    };
+    reader.onerror = () => setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+        <p className="upgrade-copy">Save your high score and settings to a file on your device — and bring it back later, even after reinstalling or switching phones.</p>
+        <label className="field-label">Download</label>
+        <button type="button" className="btn btn-primary" style={{ width: "100%", marginBottom: 18 }} onClick={handleDownload}>⬇ Download backup</button>
+        <label className="field-label">Restore</label>
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={handleRestoreClick}>⬆ Restore from backup</button>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" className="backup-file-input" onChange={handleFileChange} />
+        {status && <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>{status.text}</p>}
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+      </div>
+    </div>
+  );
+}
+
+function GameOverModal({ score, highScore, isNewHigh, onRestart }) {
+  return (
+    <div className="modal-overlay">
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        {isNewHigh && <Confetti />}
+        <h2>{isNewHigh ? "🎉 New high score!" : "Game over"}</h2>
+        <p className="upgrade-copy">
+          The stack crossed the line. You scored <strong>{score}</strong>
+          {!isNewHigh && <> — best is still {highScore}</>}.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-primary" onClick={onRestart}>🔁 Play again</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. GAME CANVAS — owns the animation loop and pointer input
+//
+// Everything per-frame (physics + drawing) happens on refs, not React
+// state, since re-rendering the whole component tree 60 times a second
+// would be far too slow. React state is only touched for things the UI
+// chrome outside the canvas actually needs to show (score, next-up
+// tier, game over), and only at the moment those values change.
+// ---------------------------------------------------------------------
+
+const ARENA_WIDTH = 340;
+const ARENA_HEIGHT = 460;
+const DROP_COOLDOWN = 0.5;
+
+function GameCanvas({ palette, onScoreChange, onGameOver, running, resetToken }) {
+  const canvasRef = React.useRef(null);
+  const robotsRef = React.useRef([]);
+  const nextTierRef = React.useRef(randomSpawnTier());
+  const aimXRef = React.useRef(ARENA_WIDTH / 2);
+  const aimingRef = React.useRef(false);
+  const cooldownRef = React.useRef(0);
+  const overLineTimerRef = React.useRef(0);
+  const lastTsRef = React.useRef(null);
+  const rafRef = React.useRef(null);
+  const scoreRef = React.useRef(0);
+  const [, forceTick] = React.useState(0); // bumped only to redraw the "next" preview chip
+  const dangerLineY = ARENA_HEIGHT * DANGER_LINE_RATIO;
+
+  // (Re)initialize a fresh run whenever resetToken changes.
+  React.useEffect(() => {
+    robotsRef.current = [];
+    nextTierRef.current = randomSpawnTier();
+    aimXRef.current = ARENA_WIDTH / 2;
+    cooldownRef.current = 0;
+    overLineTimerRef.current = 0;
+    scoreRef.current = 0;
+    onScoreChange(0);
+    forceTick((t) => t + 1);
+  }, [resetToken]);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = ARENA_WIDTH * dpr;
+    canvas.height = ARENA_HEIGHT * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    function frame(ts) {
+      rafRef.current = requestAnimationFrame(frame);
+      if (!running) {
+        lastTsRef.current = ts;
+        return;
+      }
+      if (lastTsRef.current == null) lastTsRef.current = ts;
+      let dt = (ts - lastTsRef.current) / 1000;
+      lastTsRef.current = ts;
+      dt = Math.min(dt, 1 / 30); // clamp so a tab-switch stall doesn't tunnel robots through walls
+
+      if (cooldownRef.current > 0) cooldownRef.current -= dt;
+
+      const { pointsEarned, mergeCount } = stepPhysics(robotsRef.current, dt, ARENA_WIDTH, ARENA_HEIGHT);
+      if (pointsEarned > 0) {
+        scoreRef.current += pointsEarned;
+        onScoreChange(scoreRef.current);
+      }
+      if (mergeCount > 0) playPop(4);
+
+      const anyOverLine = robotsRef.current.some((b) => b.settled && b.y - b.r < dangerLineY);
+      if (anyOverLine) {
+        overLineTimerRef.current += dt;
+        if (overLineTimerRef.current >= GAME_OVER_HOLD_SECONDS) {
+          playGameOver();
+          onGameOver(scoreRef.current);
+        }
+      } else {
+        overLineTimerRef.current = 0;
+      }
+
+      renderFrame(ctx, robotsRef.current, ARENA_WIDTH, ARENA_HEIGHT, palette, dangerLineY, true);
+
+      // aim ghost
+      if (aimingRef.current && cooldownRef.current <= 0) {
+        const r = TIERS[nextTierRef.current - 1].r;
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(aimXRef.current, 0);
+        ctx.lineTo(aimXRef.current, ARENA_HEIGHT);
+        ctx.strokeStyle = "#94A3B8";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+        drawRobot(ctx, { x: aimXRef.current, y: r + 6, r, tier: nextTierRef.current, flash: 0 }, palette);
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palette, running]);
+
+  function clampAim(clientX) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const scale = ARENA_WIDTH / rect.width;
+    const x = (clientX - rect.left) * scale;
+    const r = TIERS[nextTierRef.current - 1].r;
+    return Math.max(r, Math.min(ARENA_WIDTH - r, x));
+  }
+
+  function handlePointerDown(e) {
+    if (!running) return;
+    aimingRef.current = true;
+    aimXRef.current = clampAim(e.clientX);
+  }
+  function handlePointerMove(e) {
+    if (!running || !aimingRef.current) return;
+    aimXRef.current = clampAim(e.clientX);
+  }
+  function handlePointerUp() {
+    if (!running || !aimingRef.current) return;
+    aimingRef.current = false;
+    if (cooldownRef.current > 0) return;
+    const tier = nextTierRef.current;
+    const r = TIERS[tier - 1].r;
+    robotsRef.current.push(createRobot(tier, aimXRef.current, r + 6));
+    nextTierRef.current = randomSpawnTier();
+    cooldownRef.current = DROP_COOLDOWN;
+    forceTick((t) => t + 1);
+  }
+
+  return (
+    <div className="arena-wrap">
+      <div className="next-row">
+        <span className="next-label">Next</span>
+        <div className={`next-chip tier-${nextTierRef.current}`}>
+          <span style={{ background: palette.colors[nextTierRef.current - 1][0] }} className="next-dot" />
+          {TIERS[nextTierRef.current - 1].name}
+        </div>
+      </div>
+      <canvas
+        ref={canvasRef}
+        className="arena-canvas"
+        style={{ width: ARENA_WIDTH, height: ARENA_HEIGHT }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={() => { aimingRef.current = false; }}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 7. APP
+// ---------------------------------------------------------------------
+
+function App() {
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [packId, setPackId] = useState(loadPack);
+  const [highScore, setHighScore] = useState(loadHighScore);
+  const [score, setScore] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [isNewHigh, setIsNewHigh] = useState(false);
+  const [resetToken, setResetToken] = useState(0);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => { savePro(pro); }, [pro]);
+  useEffect(() => { savePack(packId); }, [packId]);
+
+  function handleScoreChange(next) {
+    setScore(next);
+  }
+
+  function handleGameOver(finalScore) {
+    setGameOver(true);
+    if (finalScore > highScore) {
+      setHighScore(finalScore);
+      saveHighScore(finalScore);
+      setIsNewHigh(true);
+    } else {
+      setIsNewHigh(false);
+    }
+  }
+
+  function handleRestart() {
+    setGameOver(false);
+    setIsNewHigh(false);
+    setResetToken((t) => t + 1);
+  }
+
+  function handlePurchasePro() {
+    setPro({ owned: true });
+  }
+
+  function handleSelectPack(id) {
+    if (PALETTES[id].free || pro.owned) setPackId(id);
+  }
+
+  const palette = PALETTES[packId] && (PALETTES[packId].free || pro.owned) ? PALETTES[packId] : PALETTES.chrome;
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🤖</span> Brobots
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Brobots Pro">
+            {pro.owned ? "⭐" : "👑"}
+          </button>
+          <button className="theme-toggle" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} aria-label="Toggle dark mode">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">💾</button>
+        </div>
+      </header>
+
+      <div className="score-row">
+        <div className="score-box">
+          <span className="score-label">Score</span>
+          <span className="score-value">{score}</span>
+        </div>
+        <div className="score-box">
+          <span className="score-label">Best</span>
+          <span className="score-value best">{highScore}</span>
+        </div>
+      </div>
+
+      <p className="instructions">Drag to aim, release to drop. Same color + size = merge!</p>
+
+      <GameCanvas
+        palette={palette}
+        onScoreChange={handleScoreChange}
+        onGameOver={handleGameOver}
+        running={!gameOver}
+        resetToken={resetToken}
+      />
+
+      {gameOver && (
+        <GameOverModal score={score} highScore={highScore} isNewHigh={isNewHigh} onRestart={handleRestart} />
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal
+          pro={pro}
+          pack={packId}
+          onPurchase={handlePurchasePro}
+          onSelectPack={handleSelectPack}
+          onClose={() => setUpgradeModalOpen(false)}
+        />
+      )}
+
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before
+  // notifications work at all. Silently no-ops over file:// or http, since
+  // both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>

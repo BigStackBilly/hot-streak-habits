@@ -1,0 +1,15 @@
+{
+  "name": "Brobots",
+  "short_name": "Brobots",
+  "description": "A drop-and-merge puzzle game: aim, release, and matching robots fuse into bigger ones. Don't let the stack cross the line.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5fb",
+  "theme_color": "#3b82f6",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
