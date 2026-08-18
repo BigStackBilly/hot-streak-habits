@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Gembloom</string>
+    <string name="title_activity_main">Gembloom</string>
+    <string name="package_name">com.Niloc.gembloom</string>
+    <string name="custom_url_scheme">com.Niloc.gembloom</string>
+</resources>

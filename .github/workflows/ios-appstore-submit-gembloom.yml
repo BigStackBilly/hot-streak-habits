@@ -1,0 +1,38 @@
+name: App Store Submit (Gembloom)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  submit:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/gembloom
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync Capacitor web assets into the native project
+        run: npm run sync
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/gembloom/ios/App
+
+      - name: Push metadata/screenshots and submit for review
+        working-directory: apps/gembloom/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bundle exec fastlane release

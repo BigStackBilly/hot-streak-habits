@@ -1,0 +1,21 @@
+Brobots is a drop-and-merge puzzle: aim, release, and watch two matching robots fuse into one bigger one. Keep merging, keep the board clear, and don't let the stack cross the line at the top.
+
+HOW TO PLAY
+
+Drag anywhere to aim, release to drop the robot shown in "Next." Two robots of the same color and size merge the instant they touch — Nanobot into Microbot, all the way up to the mighty Omegabot. Chain reactions cascade for big scores. Misjudge it too many times and the stack fills the screen — game over.
+
+WHY IT'S DIFFERENT
+
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Real physics, not a fixed grid — every drop lands and settles differently
+- Honest high-score tracking, saved locally, with a "new high score" callout only when it's actually true
+- Optional cosmetic robot color packs (Neon, Sunset, Galaxy) if you want to customize the look — entirely optional, never required
+- Free local backup and restore, so your high score is never trapped on one device
+- Dark mode
+
+BUILT TO STAY OUT OF YOUR WAY
+
+No lives to wait out, no energy timer, no forced ads between rounds. Just tap in, play a round, tap out.
+
+Drop your first robot today.
