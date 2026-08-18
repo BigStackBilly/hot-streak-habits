@@ -1,0 +1,1 @@
+A melody that grows a note each round. Tuned to a pentatonic scale, so nothing you tap can sound wrong.

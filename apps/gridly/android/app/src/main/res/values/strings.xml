@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Gridly</string>
+    <string name="title_activity_main">Gridly</string>
+    <string name="package_name">com.Niloc.gridly</string>
+    <string name="custom_url_scheme">com.Niloc.gridly</string>
+</resources>

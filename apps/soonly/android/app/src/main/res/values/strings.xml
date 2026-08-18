@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Soonly</string>
+    <string name="title_activity_main">Soonly</string>
+    <string name="package_name">com.Niloc.soonly</string>
+    <string name="custom_url_scheme">com.Niloc.soonly</string>
+</resources>

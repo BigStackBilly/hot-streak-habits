@@ -1,0 +1,1 @@
+Every daily grid is checked by a solver before it ships, so it can always be finished by logic. You never have to guess.

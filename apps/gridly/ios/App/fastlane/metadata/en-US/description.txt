@@ -1,0 +1,14 @@
+Gridly is a nonogram — a picture hidden in a grid, revealed by logic. The numbers beside each row and column tell you the runs of filled squares. Work out which is which.
+
+WHY IT'S DIFFERENT
+
+- Every daily grid is verified solvable by pure deduction before it ships, so you never have to guess
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Mark squares you've ruled out as you go, the way the puzzle is meant to be played
+- Unlimited free practice grids whenever you want
+- Dark mode and light mode, your choice
+
+A handful of optional colour themes are available if you want them — entirely optional, never required, and they never change the puzzle or your score. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Ten by ten. Pure logic.
