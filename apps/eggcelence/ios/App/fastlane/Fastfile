@@ -178,10 +178,11 @@ platform :ios do
     )
   end
 
-  # Diagnostic only. Apple moved AgeRatingDeclaration from AppStoreVersion to
-  # AppInfo in App Store Connect API 1.3, and expanded the questionnaire, so
-  # deliver now fails with 23 "missing a required attribute" errors. Print the
-  # real declaration to learn the exact field names and value types.
+  # Diagnostic only. Apple moved AgeRatingDeclaration onto AppInfo in ASC API
+  # 1.3 and expanded the questionnaire to 23 required attributes, so deliver
+  # can no longer put a version into a reviewable state. Rather than guess at
+  # method names or enum values, enumerate what this fastlane actually exposes
+  # and print the live declaration.
   desc "Print the current age rating declaration"
   lane :probe_age_rating do
     app_identifier = "com.Niloc.eggcelence"
@@ -195,35 +196,60 @@ platform :ios do
     Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
 
     app = Spaceship::ConnectAPI::App.find(app_identifier)
-    UI.important("app id: #{app.id}")
+    UI.important("PROBE app id: #{app.id}")
+    UI.important("PROBE fastlane: #{Fastlane::VERSION}")
 
-    infos = app.get_app_infos
-    UI.important("app_infos: #{infos.size}")
+    UI.important("PROBE App methods matching /info|age/: #{app.methods.grep(/info|age/i).sort.join(', ')}")
 
-    infos.each do |info|
-      UI.important("--- appInfo #{info.id} state=#{info.app_store_state.inspect} ---")
+    begin
+      UI.important("PROBE AppInfo class methods: #{Spaceship::ConnectAPI::AppInfo.methods(false).sort.join(', ')}")
+    rescue => e
+      UI.error("PROBE AppInfo class missing: #{e.message}")
+    end
+
+    infos = nil
+    [
+      ["app.get_app_infos", -> { app.get_app_infos }],
+      ["app.fetch_edit_app_info", -> { app.fetch_edit_app_info }],
+      ["app.fetch_live_app_info", -> { app.fetch_live_app_info }],
+      ["AppInfo.all(app_id)", -> { Spaceship::ConnectAPI::AppInfo.all(app_id: app.id) }],
+      ["ConnectAPI.get_app_infos", -> { Spaceship::ConnectAPI.get_app_infos(app_id: app.id).to_models }],
+    ].each do |label, fn|
+      next if infos
       begin
-        decl = info.fetch_age_rating_declaration
-        if decl.nil?
-          UI.important("  (no declaration)")
-          next
-        end
-        UI.important("  declaration id: #{decl.id}")
-        decl.instance_variables.sort.each do |iv|
-          UI.important("  #{iv} = #{decl.instance_variable_get(iv).inspect}")
+        r = fn.call
+        r = [r] unless r.is_a?(Array)
+        r = r.compact
+        if r.any?
+          infos = r
+          UI.important("PROBE OK via #{label} -> #{r.size} app info(s)")
+        else
+          UI.important("PROBE #{label} returned nothing")
         end
       rescue => e
-        UI.error("  fetch failed: #{e.class}: #{e.message}")
+        UI.important("PROBE #{label} failed: #{e.class}: #{e.message}")
       end
     end
 
-    # Show what the client library thinks it can write, which tells us whether
-    # the bundled Spaceship model predates Apple's newer attributes.
-    begin
-      UI.important("=== AgeRatingDeclaration attr_accessors known to this fastlane ===")
-      UI.important(Spaceship::ConnectAPI::AgeRatingDeclaration.instance_methods(false).sort.join(", "))
-    rescue => e
-      UI.error("model introspection failed: #{e.message}")
+    if infos.nil?
+      UI.error("PROBE could not reach AppInfo by any route")
+    else
+      infos.each do |info|
+        UI.important("PROBE --- appInfo #{info.id} ---")
+        UI.important("PROBE info methods /age/: #{info.methods.grep(/age/i).sort.join(', ')}")
+        begin
+          decl = info.fetch_age_rating_declaration
+          if decl
+            decl.instance_variables.sort.each do |iv|
+              UI.important("PROBE DECL #{iv} = #{decl.instance_variable_get(iv).inspect}")
+            end
+          else
+            UI.important("PROBE no declaration on this info")
+          end
+        rescue => e
+          UI.important("PROBE fetch_age_rating_declaration failed: #{e.class}: #{e.message}")
+        end
+      end
     end
   end
 
