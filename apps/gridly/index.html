@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Gridly</title>
+<meta name="theme-color" content="#4f6bd8" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Gridly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// GRIDLY — one nonogram a day
+//
+// The numbers beside each row and column say how many squares are filled
+// and in what runs. Deduce which squares are which.
+//
+// Every daily puzzle is verified solvable by pure logic before it ships:
+// a random pattern usually needs guessing, which feels terrible, so the
+// generator runs a real constraint-propagation solver and throws away any
+// pattern that solver can't finish on deduction alone.
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+const N = 10;
+const MAX_SCORE = 1000;
+const PAR_SECONDS = 420;   // ~7 minutes is a comfortable solve
+
+// ---------------------------------------------------------------------
+// Seeded randomness
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - EPOCH) / 86400000) + 1);
+}
+
+// ---------------------------------------------------------------------
+// Nonogram engine
+// ---------------------------------------------------------------------
+function cluesForLine(line) {
+  const out = [];
+  let run = 0;
+  for (const v of line) {
+    if (v === 1) run++;
+    else if (run) { out.push(run); run = 0; }
+  }
+  if (run) out.push(run);
+  return out.length ? out : [0];
+}
+
+function computeClues(grid) {
+  const rows = grid.map(cluesForLine);
+  const cols = [];
+  for (let c = 0; c < N; c++) cols.push(cluesForLine(grid.map((r) => r[c])));
+  return { rows, cols };
+}
+
+// Every arrangement of the clue's blocks that is consistent with what is
+// already known about the line (-1 unknown, 0 empty, 1 filled).
+function placements(clue, len, known) {
+  const results = [];
+  const blocks = clue[0] === 0 ? [] : clue;
+
+  function rec(idx, pos, acc) {
+    if (results.length > 20000) return;
+    if (idx === blocks.length) {
+      const line = acc.concat(new Array(len - acc.length).fill(0));
+      for (let i = 0; i < len; i++) if (known[i] !== -1 && known[i] !== line[i]) return;
+      results.push(line);
+      return;
+    }
+    const remaining = blocks.slice(idx).reduce((a, b) => a + b, 0) + (blocks.length - idx - 1);
+    for (let start = pos; start <= len - remaining; start++) {
+      const next = acc.concat(new Array(start - acc.length).fill(0), new Array(blocks[idx]).fill(1));
+      let ok = true;
+      for (let i = 0; i < next.length; i++) if (known[i] !== -1 && known[i] !== next[i]) { ok = false; break; }
+      if (!ok) continue;
+      rec(idx + 1, next.length + 1, next);
+    }
+  }
+  rec(0, 0, []);
+  return results;
+}
+
+function logicallySolvable(clues) {
+  const grid = Array.from({ length: N }, () => new Array(N).fill(-1));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let r = 0; r < N; r++) {
+      const opts = placements(clues.rows[r], N, grid[r]);
+      if (!opts.length) return false;
+      for (let c = 0; c < N; c++) {
+        const v = opts[0][c];
+        if (opts.every((o) => o[c] === v) && grid[r][c] === -1) { grid[r][c] = v; changed = true; }
+      }
+    }
+    for (let c = 0; c < N; c++) {
+      const col = grid.map((r) => r[c]);
+      const opts = placements(clues.cols[c], N, col);
+      if (!opts.length) return false;
+      for (let r = 0; r < N; r++) {
+        const v = opts[0][r];
+        if (opts.every((o) => o[r] === v) && grid[r][c] === -1) { grid[r][c] = v; changed = true; }
+      }
+    }
+  }
+  return grid.every((row) => row.every((v) => v !== -1));
+}
+
+// Seeded blob growth reads as a picture; uniform noise does not.
+function generatePattern(rand) {
+  const g = Array.from({ length: N }, () => new Array(N).fill(0));
+  const seeds = 4 + Math.floor(rand() * 4);
+  for (let s = 0; s < seeds; s++) {
+    let r = Math.floor(rand() * N), c = Math.floor(rand() * N);
+    const steps = 6 + Math.floor(rand() * 12);
+    for (let i = 0; i < steps; i++) {
+      g[r][c] = 1;
+      const d = Math.floor(rand() * 4);
+      if (d === 0 && r > 0) r--;
+      else if (d === 1 && r < N - 1) r++;
+      else if (d === 2 && c > 0) c--;
+      else if (c < N - 1) c++;
+    }
+  }
+  return g;
+}
+
+function buildPuzzle(seedKey) {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const rand = mulberry32(hashString(seedKey + ":" + attempt));
+    const grid = generatePattern(rand);
+    const filled = grid.flat().filter(Boolean).length;
+    if (filled < 25 || filled > 65) continue;
+    if (grid.some((r) => r.every((v) => v === 0))) continue;
+    let emptyCol = false;
+    for (let c = 0; c < N; c++) if (grid.every((r) => r[c] === 0)) emptyCol = true;
+    if (emptyCol) continue;
+    const clues = computeClues(grid);
+    if (logicallySolvable(clues)) return { grid, clues };
+  }
+  // Deterministic fallback: a simple frame, always solvable.
+  const grid = Array.from({ length: N }, (_, r) =>
+    Array.from({ length: N }, (_, c) => (r === 0 || r === N - 1 || c === 0 || c === N - 1 ? 1 : 0))
+  );
+  return { grid, clues: computeClues(grid) };
+}
+
+// ---------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------
+function scoreFor(seconds, mistakes) {
+  const speed = Math.max(0, 1 - Math.max(0, seconds - PAR_SECONDS) / (PAR_SECONDS * 2));
+  const base = 700 + Math.round(300 * speed);
+  return Math.max(100, base - mistakes * 40);
+}
+
+function gradeFor(mistakes) {
+  if (mistakes === 0) return { label: "Flawless", emoji: "💎" };
+  if (mistakes <= 2) return { label: "Sharp", emoji: "🌟" };
+  if (mistakes <= 5) return { label: "Solved", emoji: "👍" };
+  return { label: "Got there", emoji: "🙂" };
+}
+
+// ---------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------
+const K = {
+  stats: "gridly:stats", daily: "gridly:daily", theme: "gridly:theme",
+  pro: "gridly:pro", palette: "gridly:palette", owned: "gridly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+const EMPTY_STATS = {
+  played: 0, totalScore: 0, bestScore: 0, flawless: 0, bestTime: null,
+  streak: 0, maxStreak: 0, lastPlayed: null, history: [],
+};
+
+function recordResult(stats, key, score, mistakes, seconds) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.bestScore = Math.max(next.bestScore, score);
+  if (mistakes === 0) next.flawless += 1;
+  next.bestTime = next.bestTime === null ? seconds : Math.min(next.bestTime, seconds);
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* replay */ }
+  else next.streak = 1;
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score }].slice(-60);
+  return next;
+}
+
+const PALETTES = [
+  { id: "indigo", name: "Indigo", free: true, accent: "#4f6bd8", accent2: "#7a4fd8" },
+  { id: "forest", name: "Forest", free: false, accent: "#3f9e6a", accent2: "#2f7d84" },
+  { id: "ember", name: "Ember", free: false, accent: "#d86a4f", accent2: "#c4425f" },
+  { id: "slate", name: "Slate", free: false, accent: "#5f7285", accent2: "#3f4d5c" },
+];
+
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+// ---------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup, onHelp }) {
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">
+          {[1, 0, 1, 1, 1, 0, 0, 1, 1].map((v, i) => <span key={i} className={v ? "on" : ""} />)}
+        </div>
+        <h1 className="hero-title">Gridly</h1>
+        <p className="hero-sub">One picture puzzle a day. Pure logic, no guessing.</p>
+      </div>
+
+      {stats.streak > 0 && <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}<span className="done-max">/{MAX_SCORE}</span></div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Play today's grid</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Solved</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.flawless}</div><div className="stat-cap">Flawless</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestTime === null ? "—" : fmtTime(stats.bestTime)}</div><div className="stat-cap">Best time</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onHelp}>How to play</button>
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+function GameView({ puzzle, isPractice, onDone, onQuit, onHelp }) {
+  const { grid: solution, clues } = puzzle;
+  // 0 = untouched, 1 = filled, 2 = marked empty
+  const [marks, setMarks] = useState(() => Array.from({ length: N }, () => new Array(N).fill(0)));
+  const [mistakes, setMistakes] = useState(0);
+  const [mode, setMode] = useState("fill");
+  const [elapsed, setElapsed] = useState(0);
+  const [shake, setShake] = useState(null);
+
+  const startRef = useRef(Date.now());
+  const doneRef = useRef(false);
+  const marksRef = useRef(marks);
+  marksRef.current = marks;
+  const mistakesRef = useRef(0);
+
+  useEffect(() => {
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const filledCount = marks.flat().filter((v) => v === 1).length;
+  const targetCount = solution.flat().filter(Boolean).length;
+
+  const tap = (r, c) => {
+    if (doneRef.current || marks[r][c] === 1) return;
+
+    if (mode === "mark") {
+      setMarks((prev) => {
+        const next = prev.map((row) => [...row]);
+        next[r][c] = next[r][c] === 2 ? 0 : 2;
+        return next;
+      });
+      return;
+    }
+
+    // Filling a square that isn't part of the picture is the only way to
+    // be wrong, so it costs a mistake and is auto-marked empty instead.
+    if (solution[r][c] === 0) {
+      mistakesRef.current += 1;
+      setMistakes(mistakesRef.current);
+      setShake(`${r}-${c}`);
+      setTimeout(() => setShake(null), 400);
+      setMarks((prev) => {
+        const next = prev.map((row) => [...row]);
+        next[r][c] = 2;
+        return next;
+      });
+      return;
+    }
+
+    setMarks((prev) => {
+      const next = prev.map((row) => [...row]);
+      next[r][c] = 1;
+      const done = next.every((row, ri) => row.every((v, ci) => (solution[ri][ci] === 1 ? v === 1 : true)));
+      if (done && !doneRef.current) {
+        doneRef.current = true;
+        const seconds = Math.floor((Date.now() - startRef.current) / 1000);
+        setTimeout(() => onDone({
+          seconds, mistakes: mistakesRef.current,
+          score: scoreFor(seconds, mistakesRef.current),
+        }), 650);
+      }
+      return next;
+    });
+  };
+
+  const maxRowClue = Math.max(...clues.rows.map((r) => r.length));
+  const maxColClue = Math.max(...clues.cols.map((c) => c.length));
+
+  return (
+    <div className="view game">
+      <div className="game-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="clock">{fmtTime(elapsed)}</div>
+        <div className="mistake-pill" title="Mistakes">✕ {mistakes}</div>
+        {isPractice && <div className="practice-tag">Practice</div>}
+      </div>
+
+      <div className="progress-line">
+        <div className="progress-fill" style={{ width: `${(filledCount / targetCount) * 100}%` }} />
+      </div>
+
+      <div className="board-wrap">
+        <div
+          className="board"
+          style={{
+            gridTemplateColumns: `auto repeat(${N}, 1fr)`,
+            gridTemplateRows: `auto repeat(${N}, 1fr)`,
+          }}
+        >
+          <div className="corner" />
+
+          {clues.cols.map((clue, c) => (
+            <div key={`c${c}`} className={"clue col-clue" + (c % 5 === 0 ? " band" : "")} style={{ minHeight: maxColClue * 15 }}>
+              {clue.map((n, i) => <span key={i}>{n === 0 ? "·" : n}</span>)}
+            </div>
+          ))}
+
+          {clues.rows.map((clue, r) => (
+            <React.Fragment key={`r${r}`}>
+              <div className={"clue row-clue" + (r % 5 === 0 ? " band" : "")} style={{ minWidth: maxRowClue * 15 }}>
+                {clue.map((n, i) => <span key={i}>{n === 0 ? "·" : n}</span>)}
+              </div>
+              {Array.from({ length: N }, (_, c) => {
+                const v = marks[r][c];
+                return (
+                  <button
+                    key={c}
+                    className={
+                      "cell" + (v === 1 ? " on" : "") + (v === 2 ? " off" : "") +
+                      (shake === `${r}-${c}` ? " wrong" : "") +
+                      (r % 5 === 0 ? " tband" : "") + (c % 5 === 0 ? " lband" : "")
+                    }
+                    onClick={() => tap(r, c)}
+                    aria-label={`row ${r + 1} column ${c + 1}`}
+                  >
+                    {v === 2 ? "✕" : ""}
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+
+      <div className="mode-row">
+        <button className={"mode-btn" + (mode === "fill" ? " active" : "")} onClick={() => setMode("fill")}>
+          ◼ Fill
+        </button>
+        <button className={"mode-btn" + (mode === "mark" ? " active" : "")} onClick={() => setMode("mark")}>
+          ✕ Mark
+        </button>
+        <button className="mode-btn ghost" onClick={onHelp}>?</button>
+      </div>
+    </div>
+  );
+}
+
+function ResultsView({ result, puzzle, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const grade = gradeFor(result.mistakes);
+
+  const share = () => {
+    // A miniature of the solved picture, in blocks.
+    const pic = puzzle.grid
+      .filter((_, r) => r % 2 === 0)
+      .map((row) => row.filter((_, c) => c % 2 === 0).map((v) => (v ? "⬛" : "⬜")).join(""))
+      .join("\n");
+    const text = [
+      `Gridly #${puzzleNo} — ${result.score}/${MAX_SCORE}`,
+      `${fmtTime(result.seconds)} · ${result.mistakes} mistake${result.mistakes === 1 ? "" : "s"}`,
+      pic,
+      stats.streak > 1 ? `🔥 ${stats.streak}` : "",
+    ].filter(Boolean).join("\n");
+    if (navigator.share) navigator.share({ text }).catch(() => {});
+    else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true); setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{grade.emoji}</div>
+        <div className="grade-label">{grade.label}</div>
+        <div className="result-score">{result.score}<span className="done-max">/{MAX_SCORE}</span></div>
+      </div>
+
+      <div className="mini-pic">
+        {puzzle.grid.map((row, r) => (
+          <div key={r} className="mini-row">
+            {row.map((v, c) => <span key={c} className={v ? "mini on" : "mini"} />)}
+          </div>
+        ))}
+      </div>
+
+      <div className="review">
+        <div className="review-row"><span className="review-q">Time</span><span className="review-pts">{fmtTime(result.seconds)}</span></div>
+        <div className="review-row"><span className="review-q">Mistakes</span><span className="review-pts">{result.mistakes}</span></div>
+      </div>
+
+      {!isPractice && <button className="btn btn-primary" onClick={share}>{copied ? "Copied!" : "Share result"}</button>}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice puzzle</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function HelpModal({ onClose }) {
+  return (
+    <Modal title="How to play" onClose={onClose}>
+      <p className="sheet-note">
+        The numbers beside each row and column tell you the runs of filled squares, in order.
+        A row marked <b>3 1</b> has three filled squares, then at least one gap, then one more.
+      </p>
+      <p className="sheet-note">
+        Use <b>Fill</b> for squares you're sure are part of the picture, and <b>Mark</b> to cross
+        off squares you've ruled out. Filling a square that isn't part of the picture costs you
+        a mistake, so mark what you've eliminated as you go.
+      </p>
+      <p className="sheet-note">
+        Every daily grid is checked before it ships: it can always be finished by logic alone.
+        You never have to guess.
+      </p>
+    </Modal>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const avg = stats.played ? Math.round(stats.totalScore / stats.played) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.score));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Solved</span></div>
+        <div><b>{stats.flawless}</b><span>Flawless</span></div>
+        <div><b>{avg}</b><span>Average</span></div>
+        <div><b>{stats.bestScore}</b><span>Best</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} grids</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.score}`}>
+                <div className="bar" style={{ height: `${(h.score / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">Colour themes only — they never change the puzzle or your score.</p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button key={p.id} className={"palette" + (palette === p.id ? " active" : "")} onClick={() => onPick(p.id, unlocked)}>
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "gridly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(Object.values(K).map((k) => [k, localStorage.getItem(k)]).filter(([, v]) => v !== null)),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `gridly-backup-${dateKey()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "gridly" || !parsed.data) { setMsg("That file isn't a Gridly backup."); return; }
+        Object.entries(parsed.data).forEach(([k, v]) => { if (typeof v === "string") localStorage.setItem(k, v); });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your results live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "light");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "indigo");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [puzzle, setPuzzle] = useState(null);
+  const [result, setResult] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    const p = buildPuzzle(today);
+    setPuzzle(p);
+    setPractice(false);
+    if (todayEntry) { setResult(todayEntry); setScreen("results"); }
+    else setScreen("game");
+  };
+
+  const startPractice = () => {
+    setPuzzle(buildPuzzle(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("game");
+  };
+
+  const finish = (r) => {
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: r }));
+      setStats((s) => recordResult(s, today, r.score, r.mistakes, r.seconds));
+    }
+    setResult(r);
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Gridly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+          onHelp={() => setModal("help")}
+        />
+      )}
+
+      {screen === "game" && puzzle && (
+        <GameView
+          key={practice ? `p-${Date.now()}` : today}
+          puzzle={puzzle} isPractice={practice}
+          onDone={finish} onQuit={() => setScreen("home")}
+          onHelp={() => setModal("help")}
+        />
+      )}
+
+      {screen === "results" && result && puzzle && (
+        <ResultsView
+          result={result} puzzle={puzzle} stats={stats}
+          isPractice={practice} puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")} onPractice={startPractice}
+        />
+      )}
+
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} />}
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

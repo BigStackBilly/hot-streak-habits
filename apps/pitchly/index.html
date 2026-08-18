@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Pitchly</title>
+<meta name="theme-color" content="#7d5cd6" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pitchly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// PITCHLY — hear a melody, tap it back
+//
+// Six pads tuned to a pentatonic scale, so no combination of notes can
+// sound wrong. The melody grows by one note each round. Everyone gets the
+// same melody on the same day.
+//
+// Sound is generated with the Web Audio API — no audio files, nothing to
+// download, and it works offline.
+// =====================================================================
+
+const { useState, useEffect, useRef, useCallback } = React;
+
+// Major pentatonic (C D E G A C) — any sequence of these is consonant.
+const PADS = [
+  { note: "C", freq: 261.63, hue: 4 },
+  { note: "D", freq: 293.66, hue: 32 },
+  { note: "E", freq: 329.63, hue: 52 },
+  { note: "G", freq: 392.00, hue: 152 },
+  { note: "A", freq: 440.00, hue: 200 },
+  { note: "C", freq: 523.25, hue: 260 },
+];
+
+const START_LEN = 3;
+const MAX_ROUNDS = 8;
+const MAX_SCORE = 1000;
+
+// ---------------------------------------------------------------------
+// Seeded daily melody
+// ---------------------------------------------------------------------
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function dateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const EPOCH = new Date(2026, 0, 1);
+function puzzleNumber(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return Math.max(1, Math.round((new Date(y, m - 1, d) - EPOCH) / 86400000) + 1);
+}
+
+// One long melody per day; each round reveals one more note of it, so the
+// sequence stays consistent as it grows rather than being re-rolled.
+function buildMelody(seedKey) {
+  const rand = mulberry32(hashString(seedKey));
+  const total = START_LEN + MAX_ROUNDS - 1;
+  const out = [];
+  for (let i = 0; i < total; i++) {
+    let n = Math.floor(rand() * PADS.length);
+    // Avoid three identical notes in a row; it's tedious rather than hard.
+    if (i >= 2 && out[i - 1] === n && out[i - 2] === n) n = (n + 1) % PADS.length;
+    out.push(n);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------
+// Audio. One shared context, created lazily on the first user gesture
+// because mobile browsers refuse to start audio any other way.
+// ---------------------------------------------------------------------
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, duration = 0.42) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  // A touch of triangle keeps it warm rather than a harsh sine beep.
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, now);
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.28, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + duration + 0.05);
+}
+
+// ---------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------
+const scoreFor = (roundsCleared) => Math.round((roundsCleared / MAX_ROUNDS) * MAX_SCORE);
+
+function gradeFor(rounds) {
+  if (rounds >= MAX_ROUNDS) return { label: "Perfect ear", emoji: "🏆" };
+  if (rounds >= 6) return { label: "Sharp", emoji: "🌟" };
+  if (rounds >= 4) return { label: "Solid", emoji: "👍" };
+  if (rounds >= 2) return { label: "Warming up", emoji: "🙂" };
+  return { label: "Room to grow", emoji: "🌱" };
+}
+
+// ---------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------
+const K = {
+  stats: "pitchly:stats", daily: "pitchly:daily", theme: "pitchly:theme",
+  pro: "pitchly:pro", palette: "pitchly:palette", owned: "pitchly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+const EMPTY_STATS = {
+  played: 0, totalScore: 0, bestScore: 0, bestRounds: 0, perfect: 0,
+  streak: 0, maxStreak: 0, lastPlayed: null, history: [],
+};
+
+function recordResult(stats, key, score, rounds) {
+  const next = { ...stats };
+  next.played += 1;
+  next.totalScore += score;
+  next.bestScore = Math.max(next.bestScore, score);
+  next.bestRounds = Math.max(next.bestRounds, rounds);
+  if (rounds >= MAX_ROUNDS) next.perfect += 1;
+  const yesterday = dateKey(new Date(Date.now() - 86400000));
+  if (next.lastPlayed === yesterday) next.streak += 1;
+  else if (next.lastPlayed === key) { /* replay */ }
+  else next.streak = 1;
+  next.maxStreak = Math.max(next.maxStreak, next.streak);
+  next.lastPlayed = key;
+  next.history = [...next.history, { date: key, score }].slice(-60);
+  return next;
+}
+
+const PALETTES = [
+  { id: "violet", name: "Violet", free: true, accent: "#7d5cd6", accent2: "#b04fc4" },
+  { id: "reef", name: "Reef", free: false, accent: "#2fb0a8", accent2: "#3f7fd0" },
+  { id: "sunset", name: "Sunset", free: false, accent: "#e08a3e", accent2: "#d9534f" },
+  { id: "ink", name: "Ink", free: false, accent: "#66798f", accent2: "#414f63" },
+];
+
+// ---------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------
+function HomeView({ stats, todayDone, todayScore, onPlay, onPractice, onStats, onShop, onBackup, onHelp }) {
+  return (
+    <div className="view home">
+      <div className="hero">
+        <div className="hero-mark">
+          {[38, 62, 46, 78, 54].map((h, i) => <span key={i} style={{ height: `${h}%` }} />)}
+        </div>
+        <h1 className="hero-title">Pitchly</h1>
+        <p className="hero-sub">Hear a melody. Tap it back. Same one for everyone.</p>
+      </div>
+
+      {stats.streak > 0 && <div className="streak-chip">🔥 {stats.streak} day{stats.streak === 1 ? "" : "s"} in a row</div>}
+
+      {todayDone ? (
+        <div className="done-card">
+          <div className="done-label">Today's score</div>
+          <div className="done-score">{todayScore}<span className="done-max">/{MAX_SCORE}</span></div>
+          <button className="btn btn-primary" onClick={onPlay}>See results</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice melody</button>
+        </div>
+      ) : (
+        <div className="cta-stack">
+          <button className="btn btn-primary btn-big" onClick={onPlay}>Play today's melody</button>
+          <button className="btn btn-ghost" onClick={onPractice}>Practice melody</button>
+        </div>
+      )}
+
+      <div className="stat-row">
+        <div className="stat-cell"><div className="stat-num">{stats.played}</div><div className="stat-cap">Played</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.bestRounds}</div><div className="stat-cap">Best run</div></div>
+        <div className="stat-cell"><div className="stat-num">{stats.perfect}</div><div className="stat-cap">Perfect</div></div>
+      </div>
+
+      <div className="link-row">
+        <button className="link-btn" onClick={onHelp}>How to play</button>
+        <button className="link-btn" onClick={onStats}>Stats</button>
+        <button className="link-btn" onClick={onShop}>Themes</button>
+        <button className="link-btn" onClick={onBackup}>Backup</button>
+      </div>
+    </div>
+  );
+}
+
+function GameView({ melody, isPractice, onDone, onQuit }) {
+  const [round, setRound] = useState(0);          // 0-indexed
+  const [phase, setPhase] = useState("ready");    // ready | playing | input | wrong
+  const [lit, setLit] = useState(null);
+  const [pos, setPos] = useState(0);
+  const [muted, setMuted] = useState(false);
+
+  const doneRef = useRef(false);
+  const timers = useRef([]);
+  const roundRef = useRef(0);
+  roundRef.current = round;
+
+  const seqLength = START_LEN + round;
+  const sequence = melody.slice(0, seqLength);
+
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+  useEffect(() => () => clearTimers(), []);
+
+  const playSequence = useCallback(() => {
+    if (doneRef.current) return;
+    clearTimers();
+    setPhase("playing");
+    setPos(0);
+
+    const seq = melody.slice(0, START_LEN + roundRef.current);
+    const gap = 560;
+
+    seq.forEach((padIdx, i) => {
+      timers.current.push(setTimeout(() => {
+        setLit(padIdx);
+        if (!muted) playTone(PADS[padIdx].freq);
+        timers.current.push(setTimeout(() => setLit(null), gap * 0.62));
+      }, i * gap));
+    });
+
+    timers.current.push(setTimeout(() => {
+      setPhase("input");
+      setPos(0);
+    }, seq.length * gap + 180));
+  }, [melody, muted]);
+
+  const finish = useCallback((roundsCleared) => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    clearTimers();
+    onDone({ rounds: roundsCleared, score: scoreFor(roundsCleared) });
+  }, [onDone]);
+
+  const tapPad = (idx) => {
+    if (phase !== "input" || doneRef.current) return;
+
+    ensureAudio();
+    if (!muted) playTone(PADS[idx].freq, 0.3);
+    setLit(idx);
+    setTimeout(() => setLit(null), 170);
+
+    if (sequence[pos] !== idx) {
+      setPhase("wrong");
+      // Round `round` was not cleared, so the score is the rounds before it.
+      timers.current.push(setTimeout(() => finish(round), 900));
+      return;
+    }
+
+    const nextPos = pos + 1;
+    if (nextPos >= sequence.length) {
+      const cleared = round + 1;
+      if (cleared >= MAX_ROUNDS) {
+        timers.current.push(setTimeout(() => finish(MAX_ROUNDS), 600));
+        return;
+      }
+      setPhase("ready");
+      setRound(cleared);
+      setPos(0);
+    } else {
+      setPos(nextPos);
+    }
+  };
+
+  return (
+    <div className="view game">
+      <div className="game-top">
+        <button className="quit-btn" onClick={onQuit} aria-label="Quit">✕</button>
+        <div className="round-label">Round {round + 1} of {MAX_ROUNDS}</div>
+        <button className="quit-btn" onClick={() => setMuted((m) => !m)} aria-label="Mute">
+          {muted ? "🔇" : "🔊"}
+        </button>
+        {isPractice && <div className="practice-tag">Practice</div>}
+      </div>
+
+      <div className="pips">
+        {Array.from({ length: MAX_ROUNDS }).map((_, i) => (
+          <span key={i} className={"pip" + (i < round ? " done" : "") + (i === round ? " now" : "")} />
+        ))}
+      </div>
+
+      <div className="status-card">
+        <div className="status-main">
+          {phase === "ready" && "Listen carefully"}
+          {phase === "playing" && "Playing…"}
+          {phase === "input" && `Your turn — ${pos}/${sequence.length}`}
+          {phase === "wrong" && "Not that one"}
+        </div>
+        <div className="status-sub">{sequence.length} notes</div>
+      </div>
+
+      <div className={"pads" + (phase === "input" ? " live" : "")}>
+        {PADS.map((p, i) => (
+          <button
+            key={i}
+            className={"pad" + (lit === i ? " lit" : "")}
+            style={{ "--pad-hue": p.hue }}
+            onClick={() => tapPad(i)}
+            disabled={phase !== "input"}
+            aria-label={`Pad ${i + 1}, note ${p.note}`}
+          >
+            <span className="pad-note">{p.note}</span>
+          </button>
+        ))}
+      </div>
+
+      {phase === "ready" && (
+        <button className="btn btn-primary" onClick={playSequence}>
+          {round === 0 ? "Play the melody" : "Play the next melody"}
+        </button>
+      )}
+      {phase === "playing" && <button className="btn btn-ghost" disabled>Listening…</button>}
+      {phase === "input" && <button className="btn btn-ghost" onClick={playSequence}>Hear it again</button>}
+      {phase === "wrong" && <button className="btn btn-ghost" disabled>—</button>}
+    </div>
+  );
+}
+
+function ResultsView({ result, stats, isPractice, puzzleNo, onHome, onPractice }) {
+  const [copied, setCopied] = useState(false);
+  const grade = gradeFor(result.rounds);
+
+  const share = () => {
+    const bar = "🟪".repeat(result.rounds) + "⬜".repeat(MAX_ROUNDS - result.rounds);
+    const text = [
+      `Pitchly #${puzzleNo} — ${result.score}/${MAX_SCORE}`,
+      bar,
+      `${result.rounds}/${MAX_ROUNDS} rounds`,
+      stats.streak > 1 ? `🔥 ${stats.streak}` : "",
+    ].filter(Boolean).join("\n");
+    if (navigator.share) navigator.share({ text }).catch(() => {});
+    else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true); setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
+
+  return (
+    <div className="view results">
+      <div className="result-head">
+        <div className="grade-emoji">{grade.emoji}</div>
+        <div className="grade-label">{grade.label}</div>
+        <div className="result-score">{result.score}<span className="done-max">/{MAX_SCORE}</span></div>
+      </div>
+
+      <div className="round-bar">
+        {Array.from({ length: MAX_ROUNDS }).map((_, i) => (
+          <span key={i} className={"rb" + (i < result.rounds ? " on" : "")} />
+        ))}
+      </div>
+
+      <div className="review">
+        <div className="review-row"><span className="review-q">Rounds cleared</span><span className="review-pts">{result.rounds}/{MAX_ROUNDS}</span></div>
+        <div className="review-row"><span className="review-q">Longest melody</span><span className="review-pts">{START_LEN + result.rounds - (result.rounds ? 1 : 0)} notes</span></div>
+      </div>
+
+      {!isPractice && <button className="btn btn-primary" onClick={share}>{copied ? "Copied!" : "Share result"}</button>}
+      <button className="btn btn-ghost" onClick={onPractice}>Practice melody</button>
+      <button className="btn btn-ghost" onClick={onHome}>Home</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Modals
+// ---------------------------------------------------------------------
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function HelpModal({ onClose }) {
+  return (
+    <Modal title="How to play" onClose={onClose}>
+      <p className="sheet-note">
+        Press play and listen. The pads light up in order — then tap them back in the same order.
+      </p>
+      <p className="sheet-note">
+        Each round adds one more note, starting at three and going up to ten. Get one wrong and the
+        run ends, so your score is however many rounds you cleared.
+      </p>
+      <p className="sheet-note">
+        You can replay the melody as often as you like during your turn — it costs nothing.
+        The pads are tuned to a pentatonic scale, so nothing you tap will ever sound wrong.
+      </p>
+      <p className="sheet-note">
+        No sound? Check your ringer switch. You can also play by watching which pads light up.
+      </p>
+    </Modal>
+  );
+}
+
+function StatsModal({ stats, onClose }) {
+  const avg = stats.played ? Math.round(stats.totalScore / stats.played) : 0;
+  const recent = stats.history.slice(-14);
+  const peak = Math.max(1, ...recent.map((h) => h.score));
+  return (
+    <Modal title="Your stats" onClose={onClose}>
+      <div className="stat-grid">
+        <div><b>{stats.played}</b><span>Played</span></div>
+        <div><b>{stats.bestRounds}</b><span>Best run</span></div>
+        <div><b>{avg}</b><span>Average</span></div>
+        <div><b>{stats.bestScore}</b><span>Best</span></div>
+        <div><b>{stats.streak}</b><span>Streak</span></div>
+        <div><b>{stats.maxStreak}</b><span>Longest</span></div>
+      </div>
+      {recent.length > 0 && (
+        <>
+          <div className="chart-cap">Last {recent.length} melodies</div>
+          <div className="chart">
+            {recent.map((h, i) => (
+              <div key={i} className="bar-slot" title={`${h.date}: ${h.score}`}>
+                <div className="bar" style={{ height: `${(h.score / peak) * 100}%` }} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ShopModal({ owned, palette, pro, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">Colour themes only — they never change the melody or your score.</p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button key={p.id} className={"palette" + (palette === p.id ? " active" : "")} onClick={() => onPick(p.id, unlocked)}>
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "pitchly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(Object.values(K).map((k) => [k, localStorage.getItem(k)]).filter(([, v]) => v !== null)),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `pitchly-backup-${dateKey()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "pitchly" || !parsed.data) { setMsg("That file isn't a Pitchly backup."); return; }
+        Object.entries(parsed.data).forEach(([k, v]) => { if (typeof v === "string") localStorage.setItem(k, v); });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your results live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "dark");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "violet");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [stats, setStats] = useState(() => ({ ...EMPTY_STATS, ...readJSON(K.stats, {}) }));
+  const [daily, setDaily] = useState(() => readJSON(K.daily, {}));
+
+  const [screen, setScreen] = useState("home");
+  const [practice, setPractice] = useState(false);
+  const [melody, setMelody] = useState(null);
+  const [result, setResult] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const today = dateKey();
+  const puzzleNo = puzzleNumber(today);
+  const todayEntry = daily[today];
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.stats, stats), [stats]);
+  useEffect(() => writeJSON(K.daily, daily), [daily]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const startDaily = () => {
+    ensureAudio();
+    setMelody(buildMelody(today));
+    setPractice(false);
+    if (todayEntry) { setResult(todayEntry); setScreen("results"); }
+    else setScreen("game");
+  };
+
+  const startPractice = () => {
+    ensureAudio();
+    setMelody(buildMelody(`practice-${Date.now()}-${Math.random()}`));
+    setPractice(true);
+    setScreen("game");
+  };
+
+  const finish = (r) => {
+    if (!practice) {
+      setDaily((d) => ({ ...d, [today]: r }));
+      setStats((s) => recordResult(s, today, r.score, r.rounds));
+    }
+    setResult(r);
+    setScreen("results");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Pitchly</div>
+        <div className="top-actions">
+          <span className="puzzle-no">#{puzzleNo}</span>
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      {screen === "home" && (
+        <HomeView
+          stats={stats}
+          todayDone={Boolean(todayEntry)}
+          todayScore={todayEntry ? todayEntry.score : 0}
+          onPlay={startDaily}
+          onPractice={startPractice}
+          onStats={() => setModal("stats")}
+          onShop={() => setModal("shop")}
+          onBackup={() => setModal("backup")}
+          onHelp={() => setModal("help")}
+        />
+      )}
+
+      {screen === "game" && melody && (
+        <GameView
+          key={practice ? `p-${melody.join("")}-${Date.now()}` : today}
+          melody={melody} isPractice={practice}
+          onDone={finish} onQuit={() => setScreen("home")}
+        />
+      )}
+
+      {screen === "results" && result && (
+        <ResultsView
+          result={result} stats={stats} isPractice={practice} puzzleNo={puzzleNo}
+          onHome={() => setScreen("home")} onPractice={startPractice}
+        />
+      )}
+
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} />}
+      {modal === "stats" && <StatsModal stats={stats} onClose={() => setModal(null)} />}
+      {modal === "shop" && <ShopModal owned={owned} palette={palette} pro={pro} onPick={pickPalette} onClose={() => setModal(null)} />}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

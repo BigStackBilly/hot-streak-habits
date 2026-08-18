@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Soonly</title>
+<meta name="theme-color" content="#e0685c" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Soonly" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// SOONLY — how long until the things you're waiting for
+//
+// A list of dates you care about, counted down in plain language. Past
+// events aren't deleted, they flip to counting up, because "it's been
+// three months since" is just as useful as "in three months".
+// =====================================================================
+
+const { useState, useEffect, useRef, useMemo } = React;
+
+const K = {
+  events: "soonly:events", theme: "soonly:theme",
+  pro: "soonly:pro", palette: "soonly:palette", owned: "soonly:owned",
+};
+
+function readJSON(key, fallback) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch (e) { return fallback; }
+}
+function writeJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* non-fatal */ }
+}
+
+// ---------------------------------------------------------------------
+// Dates. Everything is anchored to local midnight so a countdown never
+// flickers between 3 and 4 days depending on the time of day.
+// ---------------------------------------------------------------------
+function midnight(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function parseDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function toISO(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const daysBetween = (a, b) => Math.round((midnight(b) - midnight(a)) / 86400000);
+
+// Recurring events roll forward to their next occurrence rather than
+// sitting in the past forever.
+function nextOccurrence(iso, repeat, today) {
+  const base = parseDate(iso);
+  if (repeat === "none") return base;
+
+  const t = midnight(today);
+  let next = new Date(base);
+
+  if (repeat === "yearly") {
+    next.setFullYear(t.getFullYear());
+    if (midnight(next) < t) next.setFullYear(t.getFullYear() + 1);
+  } else if (repeat === "monthly") {
+    next = new Date(t.getFullYear(), t.getMonth(), base.getDate());
+    if (midnight(next) < t) next = new Date(t.getFullYear(), t.getMonth() + 1, base.getDate());
+  } else if (repeat === "weekly") {
+    next = new Date(t);
+    const delta = (base.getDay() - t.getDay() + 7) % 7;
+    next.setDate(t.getDate() + delta);
+  }
+  return next;
+}
+
+function phrase(days) {
+  if (days === 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  if (days === -1) return "Yesterday";
+  const n = Math.abs(days);
+  const future = days > 0;
+
+  let unit;
+  if (n < 14) unit = `${n} days`;
+  else if (n < 60) unit = `${Math.round(n / 7)} weeks`;
+  else if (n < 730) unit = `${Math.round(n / 30.44)} months`;
+  else unit = `${(n / 365.25).toFixed(1)} years`;
+
+  return future ? `in ${unit}` : `${unit} ago`;
+}
+
+const fmtLong = (d) =>
+  d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+
+const CATEGORIES = [
+  { id: "trip", label: "Trip", emoji: "✈️" },
+  { id: "birthday", label: "Birthday", emoji: "🎂" },
+  { id: "deadline", label: "Deadline", emoji: "⏳" },
+  { id: "event", label: "Event", emoji: "🎟️" },
+  { id: "milestone", label: "Milestone", emoji: "🏁" },
+  { id: "other", label: "Other", emoji: "📌" },
+];
+
+const catOf = (id) => CATEGORIES.find((c) => c.id === id) || CATEGORIES[5];
+
+const PALETTES = [
+  { id: "coral", name: "Coral", free: true, accent: "#e0685c", accent2: "#c9457a" },
+  { id: "harbour", name: "Harbour", free: false, accent: "#3f8fd0", accent2: "#3f5fc0" },
+  { id: "meadow", name: "Meadow", free: false, accent: "#5da85f", accent2: "#3f8f7a" },
+  { id: "dusk", name: "Dusk", free: false, accent: "#8c6fd0", accent2: "#5f4fa8" },
+];
+
+const FREE_LIMIT = 8;
+const uid = () => `e${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+// ---------------------------------------------------------------------
+// Components
+// ---------------------------------------------------------------------
+function Ring({ days, total }) {
+  // Fraction of the way through the wait, when we know when it started.
+  const pct = total > 0 ? Math.max(0, Math.min(1, 1 - days / total)) : (days <= 0 ? 1 : 0);
+  const R = 26, C = 2 * Math.PI * R;
+  return (
+    <svg viewBox="0 0 64 64" className="ring">
+      <circle cx="32" cy="32" r={R} className="ring-track" />
+      <circle cx="32" cy="32" r={R} className="ring-fill"
+        strokeDasharray={C} strokeDashoffset={C * (1 - pct)} />
+    </svg>
+  );
+}
+
+function EventCard({ ev, today, onEdit }) {
+  const target = nextOccurrence(ev.date, ev.repeat, today);
+  const days = daysBetween(today, target);
+  const cat = catOf(ev.category);
+  const total = ev.createdOn ? Math.max(1, daysBetween(parseDate(ev.createdOn), target)) : 0;
+
+  return (
+    <button className={"event" + (days < 0 ? " past" : "") + (days === 0 ? " today" : "")} onClick={() => onEdit(ev)}>
+      <div className="event-ring">
+        <Ring days={days} total={total} />
+        <span className="event-emoji">{cat.emoji}</span>
+      </div>
+      <div className="event-body">
+        <div className="event-title">{ev.title}</div>
+        <div className="event-date">{fmtLong(target)}{ev.repeat !== "none" ? " · repeats" : ""}</div>
+      </div>
+      <div className="event-count">
+        <div className="count-num">{days === 0 ? "🎉" : Math.abs(days)}</div>
+        <div className="count-cap">{days === 0 ? "today" : days > 0 ? "days" : "ago"}</div>
+      </div>
+    </button>
+  );
+}
+
+function EditSheet({ initial, onSave, onDelete, onClose, today }) {
+  const [title, setTitle] = useState(initial ? initial.title : "");
+  const [date, setDate] = useState(initial ? initial.date : toISO(today));
+  const [category, setCategory] = useState(initial ? initial.category : "event");
+  const [repeat, setRepeat] = useState(initial ? initial.repeat : "none");
+  const [err, setErr] = useState("");
+
+  const save = () => {
+    const clean = title.trim();
+    if (!clean) { setErr("Give it a name."); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { setErr("Pick a date."); return; }
+    onSave({
+      id: initial ? initial.id : uid(),
+      title: clean.slice(0, 60),
+      date, category, repeat,
+      createdOn: initial ? initial.createdOn : toISO(today),
+    });
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{initial ? "Edit" : "New countdown"}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+
+        <label className="field">
+          <span>What is it?</span>
+          <input
+            value={title}
+            onChange={(e) => { setTitle(e.target.value); setErr(""); }}
+            placeholder="Flight to Lisbon"
+            maxLength={60}
+            autoFocus={!initial}
+          />
+        </label>
+
+        <label className="field">
+          <span>When?</span>
+          <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setErr(""); }} />
+        </label>
+
+        <div className="field">
+          <span>Kind</span>
+          <div className="chip-row">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c.id}
+                className={"chip" + (category === c.id ? " active" : "")}
+                onClick={() => setCategory(c.id)}
+              >
+                {c.emoji} {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="field">
+          <span>Repeat</span>
+          <div className="chip-row">
+            {[["none", "Once"], ["weekly", "Weekly"], ["monthly", "Monthly"], ["yearly", "Yearly"]].map(([id, label]) => (
+              <button key={id} className={"chip" + (repeat === id ? " active" : "")} onClick={() => setRepeat(id)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {err && <div className="err">{err}</div>}
+
+        <button className="btn btn-primary" onClick={save}>{initial ? "Save" : "Add countdown"}</button>
+        {initial && <button className="btn btn-danger" onClick={() => onDelete(initial.id)}>Delete</button>}
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <h2>{title}</h2>
+          <button className="close-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ShopModal({ owned, palette, pro, count, onPick, onClose }) {
+  return (
+    <Modal title="Themes" onClose={onClose}>
+      <p className="sheet-note">
+        Colour themes only. You have {count} countdown{count === 1 ? "" : "s"}; the free list holds {FREE_LIMIT}.
+      </p>
+      <div className="palette-grid">
+        {PALETTES.map((p) => {
+          const unlocked = p.free || pro || owned.includes(p.id);
+          return (
+            <button key={p.id} className={"palette" + (palette === p.id ? " active" : "")} onClick={() => onPick(p.id, unlocked)}>
+              <span className="swatch" style={{ background: `linear-gradient(135deg, ${p.accent}, ${p.accent2})` }} />
+              <span className="palette-name">{p.name}</span>
+              {!unlocked && <span className="lock">🔒</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div className="testing-note">Testing preview — unlocks are free for now and will connect to real purchases at launch.</div>
+    </Modal>
+  );
+}
+
+function BackupModal({ onClose, onImported }) {
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  const exportData = () => {
+    const payload = {
+      app: "soonly", version: 1, exportedAt: new Date().toISOString(),
+      data: Object.fromEntries(Object.values(K).map((k) => [k, localStorage.getItem(k)]).filter(([, v]) => v !== null)),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `soonly-backup-${toISO(new Date())}.json`; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Backup downloaded.");
+  };
+
+  const importData = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (parsed.app !== "soonly" || !parsed.data) { setMsg("That file isn't a Soonly backup."); return; }
+        Object.entries(parsed.data).forEach(([k, v]) => { if (typeof v === "string") localStorage.setItem(k, v); });
+        setMsg("Restored. Reloading…");
+        setTimeout(onImported, 700);
+      } catch (err) { setMsg("Couldn't read that file."); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <Modal title="Backup & restore" onClose={onClose}>
+      <p className="sheet-note">Your countdowns live only on this device. Export a copy before switching phones — free, always.</p>
+      <button className="btn btn-primary" onClick={exportData}>Export my data</button>
+      <button className="btn btn-ghost" onClick={() => fileRef.current.click()}>Restore from file</button>
+      <input ref={fileRef} type="file" accept="application/json" onChange={importData} hidden />
+      {msg && <div className="sheet-msg">{msg}</div>}
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [theme, setTheme] = useState(() => localStorage.getItem(K.theme) || "light");
+  const [palette, setPalette] = useState(() => localStorage.getItem(K.palette) || "coral");
+  const [pro] = useState(() => localStorage.getItem(K.pro) === "1");
+  const [owned, setOwned] = useState(() => readJSON(K.owned, []));
+  const [events, setEvents] = useState(() => readJSON(K.events, []));
+
+  const [editing, setEditing] = useState(null);   // event object, or "new"
+  const [modal, setModal] = useState(null);
+  const [showPast, setShowPast] = useState(false);
+  const [limitMsg, setLimitMsg] = useState(false);
+
+  // Recomputed each render; also ticked hourly so a countdown crossing
+  // midnight updates without the app being reopened.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(K.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const p = PALETTES.find((x) => x.id === palette) || PALETTES[0];
+    document.documentElement.style.setProperty("--accent", p.accent);
+    document.documentElement.style.setProperty("--accent-2", p.accent2);
+    localStorage.setItem(K.palette, palette);
+  }, [palette]);
+
+  useEffect(() => writeJSON(K.events, events), [events]);
+  useEffect(() => writeJSON(K.owned, owned), [owned]);
+
+  const { upcoming, past } = useMemo(() => {
+    const withDays = events.map((e) => ({
+      ev: e,
+      days: daysBetween(now, nextOccurrence(e.date, e.repeat, now)),
+    }));
+    return {
+      upcoming: withDays.filter((x) => x.days >= 0).sort((a, b) => a.days - b.days).map((x) => x.ev),
+      past: withDays.filter((x) => x.days < 0).sort((a, b) => b.days - a.days).map((x) => x.ev),
+    };
+  }, [events, now]);
+
+  const save = (ev) => {
+    setEvents((prev) => {
+      const exists = prev.some((e) => e.id === ev.id);
+      return exists ? prev.map((e) => (e.id === ev.id ? ev : e)) : [...prev, ev];
+    });
+    setEditing(null);
+  };
+
+  const remove = (id) => {
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+    setEditing(null);
+  };
+
+  const addNew = () => {
+    if (!pro && events.length >= FREE_LIMIT) {
+      setLimitMsg(true);
+      setTimeout(() => setLimitMsg(false), 2600);
+      return;
+    }
+    setEditing("new");
+  };
+
+  const pickPalette = (id, unlocked) => {
+    if (!unlocked && !owned.includes(id)) setOwned((o) => [...o, id]);
+    setPalette(id);
+  };
+
+  const next = upcoming[0];
+  const nextDays = next ? daysBetween(now, nextOccurrence(next.date, next.repeat, now)) : null;
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">Soonly</div>
+        <div className="top-actions">
+          <button className="icon-btn" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label="Toggle theme">
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
+        </div>
+      </header>
+
+      <div className="view">
+        {next ? (
+          <div className="headline">
+            <div className="headline-cap">Next up</div>
+            <div className="headline-title">{next.title}</div>
+            <div className="headline-phrase">{phrase(nextDays)}</div>
+          </div>
+        ) : (
+          <div className="headline empty">
+            <div className="headline-title">Nothing counted down yet</div>
+            <div className="headline-phrase">Add the next thing you're looking forward to.</div>
+          </div>
+        )}
+
+        <button className="btn btn-primary btn-big" onClick={addNew}>+ Add a countdown</button>
+        {limitMsg && <div className="limit-msg">The free list holds {FREE_LIMIT}. Remove one, or unlock more in Themes.</div>}
+
+        {upcoming.length > 0 && (
+          <div className="list">
+            {upcoming.map((ev) => <EventCard key={ev.id} ev={ev} today={now} onEdit={setEditing} />)}
+          </div>
+        )}
+
+        {past.length > 0 && (
+          <>
+            <button className="section-toggle" onClick={() => setShowPast((s) => !s)}>
+              {showPast ? "▾" : "▸"} Already happened ({past.length})
+            </button>
+            {showPast && (
+              <div className="list">
+                {past.map((ev) => <EventCard key={ev.id} ev={ev} today={now} onEdit={setEditing} />)}
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="link-row">
+          <button className="link-btn" onClick={() => setModal("shop")}>Themes</button>
+          <button className="link-btn" onClick={() => setModal("backup")}>Backup</button>
+        </div>
+      </div>
+
+      {editing && (
+        <EditSheet
+          initial={editing === "new" ? null : editing}
+          today={now}
+          onSave={save}
+          onDelete={remove}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {modal === "shop" && (
+        <ShopModal owned={owned} palette={palette} pro={pro} count={events.length}
+          onPick={pickPalette} onClose={() => setModal(null)} />
+      )}
+      {modal === "backup" && <BackupModal onClose={() => setModal(null)} onImported={() => window.location.reload()} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
