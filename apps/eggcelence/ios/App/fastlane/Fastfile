@@ -178,14 +178,21 @@ platform :ios do
     )
   end
 
-  # Diagnostic only. Apple moved AgeRatingDeclaration onto AppInfo in ASC API
-  # 1.3 and expanded the questionnaire to 23 required attributes, so deliver
-  # can no longer put a version into a reviewable state. Rather than guess at
-  # method names or enum values, enumerate what this fastlane actually exposes
-  # and print the live declaration.
-  desc "Print the current age rating declaration"
-  lane :probe_age_rating do
-    app_identifier = "com.Niloc.eggcelence"
+  # Fills in Apple's age-rating questionnaire. Apple expanded it and moved the
+  # declaration onto AppInfo (ASC API 1.3), so every attribute reads nil and
+  # deliver cannot put a version into a reviewable state.
+  #
+  # These answers are not guesses. Every app in this repo is offline and
+  # local-only: no network calls, no ads, no accounts, no messaging, no
+  # user-generated content shared between people, and the optional unlocks are
+  # direct purchases of colour themes, not randomised rewards. So every content
+  # descriptor is NONE and every feature flag is false.
+  #
+  # Values are attempted as Apple's documented enums first; if the API rejects
+  # a type it says which values it will accept, and that is printed in full.
+  desc "Set the age rating declaration to no-objectionable-content"
+  lane :set_age_rating do
+    app_identifier = ENV["AGE_RATING_APP_ID"] || "com.Niloc.eggcelence"
 
     api_key = app_store_connect_api_key(
       key_id: ENV["ASC_KEY_ID"],
@@ -196,60 +203,66 @@ platform :ios do
     Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
 
     app = Spaceship::ConnectAPI::App.find(app_identifier)
-    UI.important("PROBE app id: #{app.id}")
-    UI.important("PROBE fastlane: #{Fastlane::VERSION}")
+    UI.important("app: #{app_identifier} (#{app.id})")
 
-    UI.important("PROBE App methods matching /info|age/: #{app.methods.grep(/info|age/i).sort.join(', ')}")
+    info = app.fetch_edit_app_info
+    UI.user_error!("No editable app info for #{app_identifier}") if info.nil?
+
+    decl = info.fetch_age_rating_declaration
+    UI.user_error!("No age rating declaration for #{app_identifier}") if decl.nil?
+    UI.important("declaration: #{decl.id}")
+
+    # Content descriptors: how much of this kind of content the app contains.
+    none_descriptors = %w[
+      alcoholTobaccoOrDrugUseOrReferences
+      contests
+      gamblingSimulated
+      gunsOrOtherWeapons
+      horrorOrFearThemes
+      matureOrSuggestiveThemes
+      medicalOrTreatmentInformation
+      profanityOrCrudeHumor
+      sexualContentGraphicAndNudity
+      sexualContentOrNudity
+      violenceCartoonOrFantasy
+      violenceRealistic
+      violenceRealisticProlongedGraphicOrSadistic
+      healthOrWellnessTopics
+    ]
+
+    # Capability flags: whether the app does this at all.
+    false_flags = %w[
+      gambling
+      lootBox
+      unrestrictedWebAccess
+      messagingAndChat
+      userGeneratedContent
+      advertising
+      parentalControls
+      ageAssurance
+      socialMedia
+      socialMediaAgeRestricted
+    ]
+
+    attrs = {}
+    none_descriptors.each { |k| attrs[k] = "NONE" }
+    false_flags.each { |k| attrs[k] = false }
+
+    UI.important("attempting #{attrs.size} attributes")
 
     begin
-      UI.important("PROBE AppInfo class methods: #{Spaceship::ConnectAPI::AppInfo.methods(false).sort.join(', ')}")
+      decl.update(attributes: attrs)
+      UI.success("Age rating declaration updated for #{app_identifier}")
     rescue => e
-      UI.error("PROBE AppInfo class missing: #{e.message}")
+      UI.error("update failed: #{e.class}")
+      UI.error(e.message.to_s[0, 4000])
+      raise
     end
 
-    infos = nil
-    [
-      ["app.get_app_infos", -> { app.get_app_infos }],
-      ["app.fetch_edit_app_info", -> { app.fetch_edit_app_info }],
-      ["app.fetch_live_app_info", -> { app.fetch_live_app_info }],
-      ["AppInfo.all(app_id)", -> { Spaceship::ConnectAPI::AppInfo.all(app_id: app.id) }],
-      ["ConnectAPI.get_app_infos", -> { Spaceship::ConnectAPI.get_app_infos(app_id: app.id).to_models }],
-    ].each do |label, fn|
-      next if infos
-      begin
-        r = fn.call
-        r = [r] unless r.is_a?(Array)
-        r = r.compact
-        if r.any?
-          infos = r
-          UI.important("PROBE OK via #{label} -> #{r.size} app info(s)")
-        else
-          UI.important("PROBE #{label} returned nothing")
-        end
-      rescue => e
-        UI.important("PROBE #{label} failed: #{e.class}: #{e.message}")
-      end
-    end
-
-    if infos.nil?
-      UI.error("PROBE could not reach AppInfo by any route")
-    else
-      infos.each do |info|
-        UI.important("PROBE --- appInfo #{info.id} ---")
-        UI.important("PROBE info methods /age/: #{info.methods.grep(/age/i).sort.join(', ')}")
-        begin
-          decl = info.fetch_age_rating_declaration
-          if decl
-            decl.instance_variables.sort.each do |iv|
-              UI.important("PROBE DECL #{iv} = #{decl.instance_variable_get(iv).inspect}")
-            end
-          else
-            UI.important("PROBE no declaration on this info")
-          end
-        rescue => e
-          UI.important("PROBE fetch_age_rating_declaration failed: #{e.class}: #{e.message}")
-        end
-      end
+    # Read it back so the log shows what actually landed.
+    fresh = app.fetch_edit_app_info.fetch_age_rating_declaration
+    fresh.instance_variables.sort.each do |iv|
+      UI.important("AFTER #{iv} = #{fresh.instance_variable_get(iv).inspect}")
     end
   end
 

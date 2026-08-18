@@ -1,9 +1,8 @@
-name: Probe age rating (Eggcelence)
+name: Set age rating declaration
 
-# Diagnostic only. Prints the live ageRatingDeclaration for Eggcelence so the
-# exact attribute names and value types can be read off, rather than guessing
-# at Apple's expanded questionnaire. Safe to delete once the submit lanes
-# supply the declaration correctly.
+# Fills in Apple's expanded age-rating questionnaire, which deliver cannot
+# supply and which blocks every submit lane. Answers are NONE/false across the
+# board because these apps are offline and local-only. Manual trigger.
 on:
   workflow_dispatch:
 
@@ -23,10 +22,10 @@ jobs:
           bundler-cache: true
           working-directory: apps/eggcelence/ios/App
 
-      - name: Print age rating declaration
+      - name: Set age rating declaration
         working-directory: apps/eggcelence/ios/App
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
-        run: bundle exec fastlane ios probe_age_rating
+        run: bundle exec fastlane ios set_age_rating
