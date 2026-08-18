@@ -177,4 +177,46 @@ platform :ios do
       },
     )
   end
+
+  # Diagnostic only. Apple expanded the age-rating questionnaire and deliver
+  # now fails with ~23 "missing a required attribute" errors, so print the
+  # real declaration to learn the exact field names and value types instead
+  # of guessing at enums.
+  desc "Print the current age rating declaration"
+  lane :probe_age_rating do
+    app_identifier = "com.Niloc.eggcelence"
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
+
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
+    UI.important("version id: #{version && version.id}")
+
+    begin
+      decl = version.fetch_age_rating_declaration
+      UI.important("=== DECLARATION (spaceship model) ===")
+      decl.instance_variables.each do |iv|
+        UI.important("#{iv} = #{decl.instance_variable_get(iv).inspect}")
+      end
+    rescue => e
+      UI.error("fetch_age_rating_declaration failed: #{e.class}: #{e.message}")
+    end
+
+    # Also hit the endpoint directly, in case the bundled Spaceship model
+    # predates Apple's newer attributes.
+    begin
+      resp = Spaceship::ConnectAPI.get("appStoreVersions/#{version.id}/ageRatingDeclaration")
+      UI.important("=== RAW API BODY ===")
+      UI.important(resp.body.to_json)
+    rescue => e
+      UI.error("raw GET failed: #{e.class}: #{e.message}")
+    end
+  end
+
 end

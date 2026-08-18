@@ -1,0 +1,32 @@
+name: Probe age rating (Eggcelence)
+
+# Diagnostic only. Prints the live ageRatingDeclaration for Eggcelence so the
+# exact attribute names and value types can be read off, rather than guessing
+# at Apple's expanded questionnaire. Safe to delete once the submit lanes
+# supply the declaration correctly.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/eggcelence
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/eggcelence/ios/App
+
+      - name: Print age rating declaration
+        working-directory: apps/eggcelence/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+        run: bundle exec fastlane ios probe_age_rating
