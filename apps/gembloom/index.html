@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Gembloom</title>
+<meta name="theme-color" content="#A855F7" />
+
+<!-- Fonts: Baloo 2 for big chunky numbers/headings, Inter for body text
+     (same two fonts every sibling app in this family uses). -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<!-- PWA: lets you "Add to Home Screen" on a phone and get a real app icon.
+     This also matters for notifications — iOS Safari only allows the
+     Notification API for a page that's been installed this way. -->
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Gembloom" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + ReactDOM (development builds are fine for a small local app) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- Babel Standalone lets the browser understand the JSX below directly,
+     no build step needed. Fine for a small local app; a "real" production
+     app would precompile this with Vite/webpack instead. -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// GEMBLOOM — a small local-first match-3 swap puzzle
+//
+// Sibling app to Hot Streak Habits / Fuseday / Brobots / etc, same house
+// style: lives inline in index.html so it can be opened directly as a
+// file:// URL with zero build step. This is the genuinely-Candy-Crush
+// mechanic (swap two adjacent gems to make a line of 3+) that neither
+// Fuseday (2048-style swipe-merge) nor Brobots (physics drop-merge)
+// actually is — a third, deliberately distinct puzzle mechanic.
+//
+// Unlike Brobots, this is turn-based, not continuous physics, so it's
+// rendered as a plain DOM/CSS grid instead of a <canvas>, and animated
+// with setTimeout-sequenced state changes instead of a
+// requestAnimationFrame loop. That's a better fit for the mechanic
+// either way (nothing here needs 60fps physics) — and it also sidesteps
+// a real limitation discovered while building Brobots: rAF never fires
+// for a backgrounded/hidden browser tab, which made that game's canvas
+// impossible to verify in some environments. setTimeout has no such
+// restriction, so this app's animations and game logic run and can be
+// tested identically regardless of tab visibility.
+//
+// Organized top to bottom as:
+//   1. Gems & palettes       - the 6 gem colors, free + Pro packs
+//   2. Board logic            - plain functions, no React — grid
+//                               generation, match-finding, collapse/refill
+//   3. localStorage helpers   - high score, pro, theme, palette
+//   4. Small components (Confetti, UpgradeModal, BackupModal, RoundOverModal)
+//   5. GemCell / Board         - the grid itself
+//   6. App                     - top-level state, turn resolution, layout
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const HIGHSCORE_KEY = "gembloom.highscore.v1";
+const THEME_KEY = "gembloom.theme.v1";
+const PRO_KEY = "gembloom.pro.v1";
+const PACK_KEY = "gembloom.pack.v1";
+const PRO_PRICE = "$3.99";
+
+// ---------------------------------------------------------------------
+// 1. GEMS & PALETTES
+// ---------------------------------------------------------------------
+
+const ROWS = 7;
+const COLS = 7;
+const GEM_COUNT = 6;
+const STARTING_MOVES = 25;
+const GEM_NAMES = ["Ruby", "Sapphire", "Emerald", "Topaz", "Amethyst", "Aqua"];
+
+const PALETTES = {
+  classic: {
+    name: "Classic", free: true,
+    colors: [
+      ["#FCA5A5", "#B91C1C"], ["#93C5FD", "#1D4ED8"], ["#A7F3D0", "#047857"],
+      ["#FDE047", "#B45309"], ["#D8B4FE", "#7E22CE"], ["#67E8F9", "#0E7490"],
+    ],
+  },
+  pastel: {
+    name: "Pastel", price: "$1.99",
+    colors: [
+      ["#FBCFE8", "#DB2777"], ["#BFDBFE", "#2563EB"], ["#BBF7D0", "#16A34A"],
+      ["#FEF08A", "#CA8A04"], ["#E9D5FF", "#9333EA"], ["#A5F3FC", "#0891B2"],
+    ],
+  },
+  neon: {
+    name: "Neon", price: "$1.99",
+    colors: [
+      ["#FB7185", "#BE123C"], ["#60A5FA", "#1D4ED8"], ["#4ADE80", "#15803D"],
+      ["#FACC15", "#A16207"], ["#E879F9", "#A21CAF"], ["#22D3EE", "#0E7490"],
+    ],
+  },
+  midnight: {
+    name: "Midnight", price: "$1.99",
+    colors: [
+      ["#F87171", "#7F1D1D"], ["#818CF8", "#312E81"], ["#34D399", "#064E3B"],
+      ["#FBBF24", "#78350F"], ["#C084FC", "#581C87"], ["#38BDF8", "#0C4A6E"],
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------
+// 2. BOARD LOGIC
+//
+// A "grid" is a plain 2D array [row][col] of either a gem object
+// { id, color } or null (briefly, mid-resolution). Everything here is
+// a pure function operating on plain arrays — no React, no DOM — which
+// made it straightforward to unit-test in isolation the same way
+// Brobots' physics kernel was.
+// ---------------------------------------------------------------------
+
+let nextGemId = 1;
+function makeGem(color) {
+  return { id: nextGemId++, color };
+}
+
+function randomColor() {
+  return Math.floor(Math.random() * GEM_COUNT);
+}
+
+// Builds a fresh board with no pre-existing matches, by rejecting any
+// color that would immediately complete a run of 3 with the two cells
+// already placed to the left or above.
+function createGrid() {
+  const grid = [];
+  for (let r = 0; r < ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < COLS; c++) {
+      const banned = new Set();
+      if (c >= 2 && row[c - 1].color === row[c - 2].color) banned.add(row[c - 1].color);
+      if (r >= 2 && grid[r - 1][c].color === grid[r - 2][c].color) banned.add(grid[r - 1][c].color);
+      let color;
+      do { color = randomColor(); } while (banned.has(color));
+      row.push(makeGem(color));
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+function cloneGrid(grid) {
+  return grid.map((row) => row.slice());
+}
+
+// Every "r,c" key that's part of a horizontal or vertical run of 3+
+// identical colors anywhere on the board.
+function findMatches(grid) {
+  const matched = new Set();
+
+  for (let r = 0; r < ROWS; r++) {
+    let runStart = 0;
+    for (let c = 1; c <= COLS; c++) {
+      const sameAsPrev = c < COLS && grid[r][c] && grid[r][c - 1] && grid[r][c].color === grid[r][c - 1].color;
+      if (!sameAsPrev) {
+        if (c - runStart >= 3) {
+          for (let k = runStart; k < c; k++) matched.add(`${r},${k}`);
+        }
+        runStart = c;
+      }
+    }
+  }
+
+  for (let c = 0; c < COLS; c++) {
+    let runStart = 0;
+    for (let r = 1; r <= ROWS; r++) {
+      const sameAsPrev = r < ROWS && grid[r][c] && grid[r - 1][c] && grid[r][c].color === grid[r - 1][c].color;
+      if (!sameAsPrev) {
+        if (r - runStart >= 3) {
+          for (let k = runStart; k < r; k++) matched.add(`${k},${c}`);
+        }
+        runStart = r;
+      }
+    }
+  }
+
+  return matched;
+}
+
+function isAdjacent(a, b) {
+  return Math.abs(a.r - b.r) + Math.abs(a.c - b.c) === 1;
+}
+
+function swapCells(grid, a, b) {
+  const next = cloneGrid(grid);
+  const tmp = next[a.r][a.c];
+  next[a.r][a.c] = next[b.r][b.c];
+  next[b.r][b.c] = tmp;
+  return next;
+}
+
+// Clears every matched cell to null, drops surviving gems down to fill
+// the gaps in each column, and spawns fresh random gems at the top.
+function clearAndRefill(grid, matchedKeys) {
+  const next = cloneGrid(grid);
+  for (const key of matchedKeys) {
+    const [r, c] = key.split(",").map(Number);
+    next[r][c] = null;
+  }
+  for (let c = 0; c < COLS; c++) {
+    const survivors = [];
+    for (let r = 0; r < ROWS; r++) {
+      if (next[r][c] !== null) survivors.push(next[r][c]);
+    }
+    const missing = ROWS - survivors.length;
+    const column = [];
+    for (let i = 0; i < missing; i++) column.push(makeGem(randomColor()));
+    for (const g of survivors) column.push(g);
+    for (let r = 0; r < ROWS; r++) next[r][c] = column[r];
+  }
+  return next;
+}
+
+// Used both to regenerate a starting board that isn't already stuck,
+// and available for a future "shuffle" feature if the board ever runs
+// dry — tests every adjacent pair by swapping on a scratch copy.
+function hasAnyValidMove(grid) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (c + 1 < COLS) {
+        const swapped = swapCells(grid, { r, c }, { r, c: c + 1 });
+        if (findMatches(swapped).size > 0) return true;
+      }
+      if (r + 1 < ROWS) {
+        const swapped = swapCells(grid, { r, c }, { r: r + 1, c });
+        if (findMatches(swapped).size > 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function createPlayableGrid() {
+  let grid = createGrid();
+  let attempts = 0;
+  while (!hasAnyValidMove(grid) && attempts < 20) {
+    grid = createGrid();
+    attempts++;
+  }
+  return grid;
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadHighScore() { return Number(localStorage.getItem(HIGHSCORE_KEY)) || 0; }
+function saveHighScore(score) { localStorage.setItem(HIGHSCORE_KEY, String(score)); }
+function loadTheme() { return localStorage.getItem(THEME_KEY) || "light"; }
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+function savePro(pro) { localStorage.setItem(PRO_KEY, JSON.stringify(pro)); }
+function loadPack() { return localStorage.getItem(PACK_KEY) || "classic"; }
+function savePack(id) { localStorage.setItem(PACK_KEY, id); }
+
+function playChime(count) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 440 + Math.min(count, 8) * 40;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.18);
+  } catch {}
+}
+
+function playThud() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "triangle";
+    osc.frequency.value = 180;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.15);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.15);
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function Confetti() {
+  const colors = ["#A855F7", "#EC4899", "#FCA5A5", "#67E8F9", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i, left: Math.random() * 100, color: colors[i % colors.length],
+    delay: Math.random() * 0.3, duration: 1.4 + Math.random() * 0.8,
+  }));
+  return (
+    <>
+      {pieces.map((p) => (
+        <div key={p.id} className="confetti-piece" style={{ left: `${p.left}%`, background: p.color, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s` }} />
+      ))}
+    </>
+  );
+}
+
+function UpgradeModal({ pro, pack, onPurchase, onSelectPack, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Gembloom Pro</h2>
+        {pro.owned ? (
+          <>
+            <p className="upgrade-copy">✓ Pro is unlocked on this device — thanks for supporting the app! Pick any gem color pack:</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <button key={id} type="button" className={`pack-option ${pack === id ? "selected" : ""}`} onClick={() => onSelectPack(id)}>
+                  <div className="pack-swatch">
+                    {p.colors.slice(0, 4).map((c, i) => <span key={i} style={{ background: c[0] }} />)}
+                  </div>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            <div className="modal-buttons" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">Unlock Pro for 3 extra gem color packs — Pastel, Neon, and Midnight. Purely cosmetic, never required to play.</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <div key={id} className={`pack-option ${p.free ? "" : "locked"}`}>
+                  <div className="pack-swatch">
+                    {p.colors.slice(0, 4).map((c, i) => <span key={i} style={{ background: c[0] }} />)}
+                  </div>
+                  {p.name}{!p.free && " 🔒"}
+                </div>
+              ))}
+            </div>
+            <div className="modal-buttons-column" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onPurchase}>Unlock Pro — {PRO_PRICE}</button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+        <p className="theme-note">
+          Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real
+          payment yet. Real App Store/Play Store billing will replace this before launch.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const BACKUP_KEYS = [HIGHSCORE_KEY, THEME_KEY, PRO_KEY, PACK_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((key) => {
+      const value = localStorage.getItem(key);
+      if (value !== null) data[key] = value;
+    });
+    const payload = { app: "gembloom", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `gembloom-backup.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+
+  function handleRestoreClick() {
+    setStatus(null);
+    if (fileInputRef.current) fileInputRef.current.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+      } catch {
+        setStatus({ type: "error", text: "That file isn't valid backup JSON." });
+        return;
+      }
+      if (!parsed || parsed.app !== "gembloom" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Gembloom backup file." });
+        return;
+      }
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+      Object.keys(parsed.data).forEach((key) => localStorage.setItem(key, parsed.data[key]));
+      window.location.reload();
+    };
+    reader.onerror = () => setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+        <p className="upgrade-copy">Save your high score and settings to a file on your device — and bring it back later, even after reinstalling or switching phones.</p>
+        <label className="field-label">Download</label>
+        <button type="button" className="btn btn-primary" style={{ width: "100%", marginBottom: 18 }} onClick={handleDownload}>⬇ Download backup</button>
+        <label className="field-label">Restore</label>
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={handleRestoreClick}>⬆ Restore from backup</button>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" className="backup-file-input" onChange={handleFileChange} />
+        {status && <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>{status.text}</p>}
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+      </div>
+    </div>
+  );
+}
+
+function RoundOverModal({ score, highScore, isNewHigh, onPlayAgain }) {
+  return (
+    <div className="modal-overlay">
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        {isNewHigh && <Confetti />}
+        <h2>{isNewHigh ? "🎉 New high score!" : "Out of moves"}</h2>
+        <p className="upgrade-copy">
+          You scored <strong>{score}</strong>{!isNewHigh && <> — best is still {highScore}</>}.
+        </p>
+        <div className="modal-buttons">
+          <button className="btn btn-primary" onClick={onPlayAgain}>🔁 Play again</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. BOARD
+// ---------------------------------------------------------------------
+
+function GemCell({ gem, r, c, isSelected, isClearing, palette, onTap }) {
+  const [light, dark] = palette.colors[gem.color];
+  return (
+    <button
+      className={`gem-cell ${isSelected ? "selected" : ""} ${isClearing ? "clearing" : ""}`}
+      style={{ background: `linear-gradient(135deg, ${light}, ${dark})` }}
+      onClick={() => onTap(r, c)}
+      aria-label={`${GEM_NAMES[gem.color]} gem, row ${r + 1}, column ${c + 1}`}
+    >
+      <span className="gem-shine" />
+    </button>
+  );
+}
+
+function Board({ grid, selected, clearing, palette, onTap }) {
+  return (
+    <div className="board" style={{ gridTemplateColumns: `repeat(${COLS}, 1fr)` }}>
+      {grid.map((row, r) =>
+        row.map((gem, c) => (
+          <GemCell
+            key={gem ? gem.id : `${r},${c}`}
+            gem={gem}
+            r={r}
+            c={c}
+            isSelected={Boolean(selected && selected.r === r && selected.c === c)}
+            isClearing={clearing.has(`${r},${c}`)}
+            palette={palette}
+            onTap={onTap}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. APP
+// ---------------------------------------------------------------------
+
+const CLEAR_DELAY = 260;
+const REFILL_DELAY = 220;
+const REVERT_DELAY = 260;
+
+function App() {
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [packId, setPackId] = useState(loadPack);
+  const [highScore, setHighScore] = useState(loadHighScore);
+  const [grid, setGrid] = useState(createPlayableGrid);
+  const [selected, setSelected] = useState(null);
+  const [clearing, setClearing] = useState(new Set());
+  const [score, setScore] = useState(0);
+  const [moves, setMoves] = useState(STARTING_MOVES);
+  const [isResolving, setIsResolving] = useState(false);
+  const [roundOver, setRoundOver] = useState(false);
+  const [isNewHigh, setIsNewHigh] = useState(false);
+  const [combo, setCombo] = useState(null);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const movesRef = useRef(moves);
+  movesRef.current = moves;
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  useEffect(() => { savePro(pro); }, [pro]);
+  useEffect(() => { savePack(packId); }, [packId]);
+
+  const palette = PALETTES[packId] && (PALETTES[packId].free || pro.owned) ? PALETTES[packId] : PALETTES.classic;
+
+  function finishRound(finalScore) {
+    setIsResolving(false);
+    setRoundOver(true);
+    if (finalScore > highScore) {
+      setHighScore(finalScore);
+      saveHighScore(finalScore);
+      setIsNewHigh(true);
+    } else {
+      setIsNewHigh(false);
+    }
+  }
+
+  // Recursive cascade resolver: find matches -> score -> pop them ->
+  // collapse+refill -> look for the NEW matches that cascade caused ->
+  // repeat until the board is quiet. Chain level increases the score
+  // multiplier each pass, same "combo" feel as a real match-3 game.
+  function resolveCascade(currentGrid, chainLevel, scoreSoFar) {
+    const matches = findMatches(currentGrid);
+    if (matches.size === 0) {
+      if (movesRef.current <= 0) finishRound(scoreSoFar);
+      else setIsResolving(false);
+      setCombo(null);
+      return;
+    }
+
+    playChime(matches.size);
+    if (chainLevel > 1) {
+      setCombo(chainLevel);
+    }
+
+    const points = matches.size * 10 * chainLevel;
+    const newScore = scoreSoFar + points;
+    setScore(newScore);
+    setClearing(matches);
+
+    setTimeout(() => {
+      const collapsed = clearAndRefill(currentGrid, matches);
+      setGrid(collapsed);
+      setClearing(new Set());
+      setTimeout(() => resolveCascade(collapsed, chainLevel + 1, newScore), REFILL_DELAY);
+    }, CLEAR_DELAY);
+  }
+
+  function handleTap(r, c) {
+    if (isResolving || roundOver) return;
+
+    if (!selected) {
+      setSelected({ r, c });
+      return;
+    }
+    if (selected.r === r && selected.c === c) {
+      setSelected(null);
+      return;
+    }
+    if (!isAdjacent(selected, { r, c })) {
+      setSelected({ r, c });
+      return;
+    }
+
+    const swapped = swapCells(grid, selected, { r, c });
+    const matches = findMatches(swapped);
+    setSelected(null);
+
+    if (matches.size === 0) {
+      playThud();
+      setGrid(swapped);
+      setIsResolving(true);
+      setTimeout(() => {
+        setGrid(grid);
+        setIsResolving(false);
+      }, REVERT_DELAY);
+      return;
+    }
+
+    setGrid(swapped);
+    setIsResolving(true);
+    const newMoves = moves - 1;
+    setMoves(newMoves);
+    movesRef.current = newMoves;
+    resolveCascade(swapped, 1, score);
+  }
+
+  function handlePlayAgain() {
+    setGrid(createPlayableGrid());
+    setScore(0);
+    setMoves(STARTING_MOVES);
+    movesRef.current = STARTING_MOVES;
+    setRoundOver(false);
+    setIsNewHigh(false);
+    setSelected(null);
+    setClearing(new Set());
+  }
+
+  function handlePurchasePro() { setPro({ owned: true }); }
+  function handleSelectPack(id) { if (PALETTES[id].free || pro.owned) setPackId(id); }
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">💎</span> Gembloom
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Gembloom Pro">{pro.owned ? "⭐" : "👑"}</button>
+          <button className="theme-toggle" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} aria-label="Toggle dark mode">{theme === "light" ? "🌙" : "☀️"}</button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">💾</button>
+        </div>
+      </header>
+
+      <div className="score-row">
+        <div className="score-box">
+          <span className="score-label">Score</span>
+          <span className="score-value">{score}</span>
+        </div>
+        <div className="score-box">
+          <span className="score-label">Moves</span>
+          <span className={`score-value ${moves <= 5 ? "low" : ""}`}>{moves}</span>
+        </div>
+        <div className="score-box">
+          <span className="score-label">Best</span>
+          <span className="score-value best">{highScore}</span>
+        </div>
+      </div>
+
+      <p className="instructions">Tap a gem, then tap a neighbor to swap. Match 3+ in a line!</p>
+
+      <div className="board-wrap">
+        <Board grid={grid} selected={selected} clearing={clearing} palette={palette} onTap={handleTap} />
+        {combo && <div className="combo-banner">Combo ×{combo}!</div>}
+      </div>
+
+      {roundOver && (
+        <RoundOverModal score={score} highScore={highScore} isNewHigh={isNewHigh} onPlayAgain={handlePlayAgain} />
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal pro={pro} pack={packId} onPurchase={handlePurchasePro} onSelectPack={handleSelectPack} onClose={() => setUpgradeModalOpen(false)} />
+      )}
+
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  // Registering a service worker is what makes "Add to Home Screen" install
+  // this as a real app on Android, and is required by iOS Safari before
+  // notifications work at all. Silently no-ops over file:// or http, since
+  // both browsers require a secure (https/localhost) context for it.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
