@@ -178,10 +178,10 @@ platform :ios do
     )
   end
 
-  # Diagnostic only. Apple expanded the age-rating questionnaire and deliver
-  # now fails with ~23 "missing a required attribute" errors, so print the
-  # real declaration to learn the exact field names and value types instead
-  # of guessing at enums.
+  # Diagnostic only. Apple moved AgeRatingDeclaration from AppStoreVersion to
+  # AppInfo in App Store Connect API 1.3, and expanded the questionnaire, so
+  # deliver now fails with 23 "missing a required attribute" errors. Print the
+  # real declaration to learn the exact field names and value types.
   desc "Print the current age rating declaration"
   lane :probe_age_rating do
     app_identifier = "com.Niloc.eggcelence"
@@ -195,27 +195,35 @@ platform :ios do
     Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
 
     app = Spaceship::ConnectAPI::App.find(app_identifier)
-    version = app.get_app_store_versions.find { |v| v.version_string == "1.0" }
-    UI.important("version id: #{version && version.id}")
+    UI.important("app id: #{app.id}")
 
-    begin
-      decl = version.fetch_age_rating_declaration
-      UI.important("=== DECLARATION (spaceship model) ===")
-      decl.instance_variables.each do |iv|
-        UI.important("#{iv} = #{decl.instance_variable_get(iv).inspect}")
+    infos = app.get_app_infos
+    UI.important("app_infos: #{infos.size}")
+
+    infos.each do |info|
+      UI.important("--- appInfo #{info.id} state=#{info.app_store_state.inspect} ---")
+      begin
+        decl = info.fetch_age_rating_declaration
+        if decl.nil?
+          UI.important("  (no declaration)")
+          next
+        end
+        UI.important("  declaration id: #{decl.id}")
+        decl.instance_variables.sort.each do |iv|
+          UI.important("  #{iv} = #{decl.instance_variable_get(iv).inspect}")
+        end
+      rescue => e
+        UI.error("  fetch failed: #{e.class}: #{e.message}")
       end
-    rescue => e
-      UI.error("fetch_age_rating_declaration failed: #{e.class}: #{e.message}")
     end
 
-    # Also hit the endpoint directly, in case the bundled Spaceship model
-    # predates Apple's newer attributes.
+    # Show what the client library thinks it can write, which tells us whether
+    # the bundled Spaceship model predates Apple's newer attributes.
     begin
-      resp = Spaceship::ConnectAPI.get("appStoreVersions/#{version.id}/ageRatingDeclaration")
-      UI.important("=== RAW API BODY ===")
-      UI.important(resp.body.to_json)
+      UI.important("=== AgeRatingDeclaration attr_accessors known to this fastlane ===")
+      UI.important(Spaceship::ConnectAPI::AgeRatingDeclaration.instance_methods(false).sort.join(", "))
     rescue => e
-      UI.error("raw GET failed: #{e.class}: #{e.message}")
+      UI.error("model introspection failed: #{e.message}")
     end
   end
 
