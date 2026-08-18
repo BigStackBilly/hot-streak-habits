@@ -183,13 +183,14 @@ platform :ios do
   # deliver cannot put a version into a reviewable state.
   #
   # These answers are not guesses. Every app in this repo is offline and
-  # local-only: no network calls, no ads, no accounts, no messaging, no
-  # user-generated content shared between people, and the optional unlocks are
-  # direct purchases of colour themes, not randomised rewards. So every content
-  # descriptor is NONE and every feature flag is false.
+  # local-only: no network calls, no ads, no accounts, no messaging, and no
+  # user content shared between people. The optional unlocks are direct
+  # purchases of colour themes, not randomised rewards. So every content
+  # descriptor is NONE and every capability flag is false.
   #
-  # Values are attempted as Apple's documented enums first; if the API rejects
-  # a type it says which values it will accept, and that is printed in full.
+  # Apple's API rejects one wrongly-typed attribute at a time and names the
+  # type it wanted, so rather than burn a CI run per attribute this parses the
+  # rejection, flips that attribute, and retries until it converges.
   desc "Set the age rating declaration to no-objectionable-content"
   lane :set_age_rating do
     app_identifier = ENV["AGE_RATING_APP_ID"] || "com.Niloc.eggcelence"
@@ -212,8 +213,7 @@ platform :ios do
     UI.user_error!("No age rating declaration for #{app_identifier}") if decl.nil?
     UI.important("declaration: #{decl.id}")
 
-    # Content descriptors: how much of this kind of content the app contains.
-    none_descriptors = %w[
+    string_descriptors = %w[
       alcoholTobaccoOrDrugUseOrReferences
       contests
       gamblingSimulated
@@ -230,8 +230,7 @@ platform :ios do
       healthOrWellnessTopics
     ]
 
-    # Capability flags: whether the app does this at all.
-    false_flags = %w[
+    bool_flags = %w[
       gambling
       lootBox
       unrestrictedWebAccess
@@ -245,21 +244,44 @@ platform :ios do
     ]
 
     attrs = {}
-    none_descriptors.each { |k| attrs[k] = "NONE" }
-    false_flags.each { |k| attrs[k] = false }
+    string_descriptors.each { |k| attrs[k] = "NONE" }
+    bool_flags.each { |k| attrs[k] = false }
 
-    UI.important("attempting #{attrs.size} attributes")
+    UI.important("starting with #{attrs.size} attributes")
 
-    begin
-      decl.update(attributes: attrs)
-      UI.success("Age rating declaration updated for #{app_identifier}")
-    rescue => e
-      UI.error("update failed: #{e.class}")
-      UI.error(e.message.to_s[0, 4000])
-      raise
+    corrections = 0
+    12.times do |round|
+      begin
+        decl.update(attributes: attrs)
+        UI.success("Age rating declaration updated for #{app_identifier} after #{corrections} type correction(s)")
+        break
+      rescue => e
+        msg = e.message.to_s
+
+        # Wrong type: the API says which it wanted, so flip just that one.
+        if msg =~ /attribute '(\w+)'\. Expected a (\w+) but got (\w+)/
+          name, expected = Regexp.last_match(1), Regexp.last_match(2)
+          attrs[name] = (expected == "BOOLEAN") ? false : "NONE"
+          corrections += 1
+          UI.important("round #{round}: #{name} -> #{expected}")
+          next
+        end
+
+        # Unknown/unwritable attribute: drop it and carry on.
+        if msg =~ /attribute '(\w+)'/ && msg =~ /not permitted|unknown|cannot be/i
+          name = Regexp.last_match(1)
+          attrs.delete(name)
+          corrections += 1
+          UI.important("round #{round}: dropping #{name}")
+          next
+        end
+
+        UI.error("unrecoverable: #{e.class}")
+        UI.error(msg[0, 3000])
+        raise
+      end
     end
 
-    # Read it back so the log shows what actually landed.
     fresh = app.fetch_edit_app_info.fetch_age_rating_declaration
     fresh.instance_variables.sort.each do |iv|
       UI.important("AFTER #{iv} = #{fresh.instance_variable_get(iv).inspect}")
