@@ -282,6 +282,23 @@ platform :ios do
       end
     end
 
+    # contentRightsDeclaration is the last attribute the submit lane reports as
+    # missing. It sits on the App itself rather than the age rating
+    # declaration. None of these apps ship third-party content: every asset is
+    # generated in-app or written for it.
+    [
+      "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+      "USES_THIRD_PARTY_CONTENT",
+    ].each do |value|
+      begin
+        app.update(attributes: { contentRightsDeclaration: value })
+        UI.success("contentRightsDeclaration set to #{value}")
+        break
+      rescue => e
+        UI.important("contentRightsDeclaration=#{value} rejected: #{e.message.to_s[0, 200]}")
+      end
+    end
+
     fresh = app.fetch_edit_app_info.fetch_age_rating_declaration
     fresh.instance_variables.sort.each do |iv|
       UI.important("AFTER #{iv} = #{fresh.instance_variable_get(iv).inspect}")
