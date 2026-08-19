@@ -5,6 +5,11 @@ name: Set age rating declaration
 # board because these apps are offline and local-only. Manual trigger.
 on:
   workflow_dispatch:
+    inputs:
+      app_id:
+        description: "Bundle ID to set the declaration on"
+        required: true
+        default: "com.Niloc.eggcelence"
 
 jobs:
   probe:
@@ -28,4 +33,5 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          AGE_RATING_APP_ID: ${{ inputs.app_id }}
         run: bundle exec fastlane ios set_age_rating
