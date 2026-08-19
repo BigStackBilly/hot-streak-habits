@@ -1,0 +1,1 @@
+https://deploy-spendlog.vercel.app/privacy.html

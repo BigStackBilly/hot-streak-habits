@@ -1,0 +1,14 @@
+TapSpend is a personal expense logger built around one idea: if logging a purchase takes longer than ten seconds, you'll stop doing it.
+
+WHY IT'S DIFFERENT
+
+- No bank linking — nothing to connect, nothing to authorise, no read access to your accounts
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- Amount, category, done. That's the whole flow
+- See where the money actually went, by category and by month
+- Dark mode and light mode, your choice
+
+Extra categories and a longer history view are available as an optional unlock if you want them — entirely optional, never required. A free backup & restore is always available too — this is your data, not a premium feature.
+
+Tap what you spent.
