@@ -4,6 +4,11 @@ name: List App Store Connect apps
 # need creating, rather than inferring it from old failures.
 on:
   workflow_dispatch:
+    inputs:
+      lane:
+        description: "Lane to run"
+        required: true
+        default: "list_apps"
 
 jobs:
   list:
@@ -24,4 +29,4 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
-        run: bundle exec fastlane ios list_apps
+        run: bundle exec fastlane ios ${{ inputs.lane }}

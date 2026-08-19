@@ -12,7 +12,7 @@ platform :ios do
   desc "Register the app (first run only) and upload a new build to TestFlight"
   lane :beta do
     app_identifier = "com.Niloc.spendlog"
-    app_name = "Spendlog"
+    app_name = "TapSpend"
     sku = "spendlog2026"
     keychain_path = File.expand_path("~/Library/Keychains/ci_build-db")
     keychain_password = ENV["CI_KEYCHAIN_PASSWORD"]
