@@ -305,4 +305,21 @@ platform :ios do
     end
   end
 
+  desc "List every app record in the App Store Connect account"
+  lane :list_apps do
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_content: ENV["ASC_KEY_CONTENT"],
+      is_key_content_base64: true,
+    )
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(**api_key)
+
+    apps = Spaceship::ConnectAPI::App.all
+    UI.important("ASCLIST count=#{apps.size}")
+    apps.sort_by { |a| a.bundle_id.to_s }.each do |a|
+      UI.important("ASCLIST #{a.bundle_id} | #{a.name} | sku=#{a.sku}")
+    end
+  end
+
 end

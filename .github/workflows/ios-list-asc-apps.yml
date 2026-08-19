@@ -1,0 +1,27 @@
+name: List App Store Connect apps
+
+# Read-only. Prints every app record in the account so we can see which still
+# need creating, rather than inferring it from old failures.
+on:
+  workflow_dispatch:
+
+jobs:
+  list:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/eggcelence/ios/App
+
+      - name: List apps
+        working-directory: apps/eggcelence/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+        run: bundle exec fastlane ios list_apps
