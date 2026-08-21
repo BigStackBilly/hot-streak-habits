@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Bubblio</title>
+<meta name="theme-color" content="#FF6EC7" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="styles.css" />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Bubblio" />
+</head>
+<body>
+
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+// =====================================================================
+// BUBBLIO — a small local-first bubble-shooter puzzle, with real levels
+//
+// Sibling app to Hot Streak Habits / Fuseday / Brobots / Gembloom, same
+// house style: lives inline in index.html, zero build step. The one
+// thing none of those other games have: an actual LEVEL structure
+// (fixed starting boards, a shot budget, 1-3 star rating, unlock
+// progression) rather than an endless/moves-limited single mode.
+//
+// Same engineering lesson carried over from Brobots/Gembloom: the grid
+// and game state are plain DOM/CSS, animated with CSS transitions +
+// setTimeout sequencing, not <canvas>/requestAnimationFrame — rAF does
+// not reliably fire on a backgrounded tab, which made Brobots' canvas
+// hard to verify. The one piece of real "physics" here (the shot's
+// flight path, including wall bounces) is computed as a deterministic,
+// instant ray-march BEFORE any animation starts — the animation is just
+// a CSS transition replaying a precomputed path, not a live simulation.
+//
+// Organized top to bottom as:
+//   1. Grid & levels          - hex-offset grid math, level definitions
+//   2. Board logic             - pure functions: neighbors, flood fill,
+//                                shot trajectory, floater detection
+//   3. localStorage helpers    - progress (stars/level), theme, pro
+//   4. Small components (Confetti, UpgradeModal, BackupModal, LevelCompleteModal)
+//   5. Shooter / Board          - the grid + aiming UI
+//   6. App                      - level select + top-level state
+// =====================================================================
+
+const { useState, useEffect, useRef } = React;
+
+const PROGRESS_KEY = "bubblio.progress.v1";
+const THEME_KEY = "bubblio.theme.v1";
+const PRO_KEY = "bubblio.pro.v1";
+const PACK_KEY = "bubblio.pack.v1";
+const PRO_PRICE = "$3.99";
+
+// ---------------------------------------------------------------------
+// 1. GRID & LEVELS
+//
+// Classic bubble-shooter "brick wall" hex-offset grid: even rows have
+// COLS bubbles at x = col*SIZE; odd rows are inset by half a bubble and
+// have COLS-1 bubbles at x = col*SIZE + SIZE/2. Rows pack vertically at
+// 0.866 * SIZE (hex row height) so each bubble nestles between the two
+// below it.
+// ---------------------------------------------------------------------
+
+const COLS = 8;
+const BUBBLE_SIZE = 38;
+const ROW_HEIGHT = BUBBLE_SIZE * 0.866;
+const ARENA_WIDTH = COLS * BUBBLE_SIZE;
+const ARENA_HEIGHT = 460;
+const CEILING_ROWS_VISIBLE = Math.floor((ARENA_HEIGHT - 60) / ROW_HEIGHT);
+
+const COLOR_COUNT_BY_DIFFICULTY = [4, 4, 5, 5, 6, 6];
+
+const PALETTES = {
+  candy: {
+    name: "Candy", free: true,
+    colors: [
+      ["#FCA5A5", "#DC2626"], ["#93C5FD", "#1D4ED8"], ["#86EFAC", "#15803D"],
+      ["#FDE047", "#CA8A04"], ["#D8B4FE", "#7E22CE"], ["#67E8F9", "#0E7490"],
+    ],
+  },
+  sherbet: {
+    name: "Sherbet", price: "$1.99",
+    colors: [
+      ["#FBCFE8", "#DB2777"], ["#BFDBFE", "#2563EB"], ["#BBF7D0", "#16A34A"],
+      ["#FEF08A", "#CA8A04"], ["#E9D5FF", "#9333EA"], ["#A5F3FC", "#0891B2"],
+    ],
+  },
+  neon: {
+    name: "Neon", price: "$1.99",
+    colors: [
+      ["#FB7185", "#BE123C"], ["#60A5FA", "#1D4ED8"], ["#4ADE80", "#15803D"],
+      ["#FACC15", "#A16207"], ["#E879F9", "#A21CAF"], ["#22D3EE", "#0E7490"],
+    ],
+  },
+  midnight: {
+    name: "Midnight", price: "$1.99",
+    colors: [
+      ["#F87171", "#7F1D1D"], ["#818CF8", "#312E81"], ["#34D399", "#064E3B"],
+      ["#FBBF24", "#78350F"], ["#C084FC", "#581C87"], ["#38BDF8", "#0C4A6E"],
+    ],
+  },
+};
+
+const TOTAL_LEVELS = 30;
+
+// Level N gets progressively more rows, more colors, and a tighter shot
+// budget. Seeded so the same level always generates the same starting
+// board (a real "level," not a fresh random board every retry).
+function levelConfig(levelNum) {
+  const rows = Math.min(5 + Math.floor(levelNum / 3), 10);
+  const colorCount = COLOR_COUNT_BY_DIFFICULTY[Math.min(Math.floor(levelNum / 5), COLOR_COUNT_BY_DIFFICULTY.length - 1)];
+  const shots = Math.max(18, 26 - Math.floor(levelNum / 2));
+  return { rows, colorCount, shots, seed: levelNum * 7919 + 13 };
+}
+
+// A tiny deterministic PRNG (mulberry32) so a level's starting board is
+// reproducible from its seed, instead of Math.random() giving a
+// different board every attempt.
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return function rng() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function colsInRow(row) {
+  return row % 2 === 0 ? COLS : COLS - 1;
+}
+
+function cellX(row, col) {
+  return row % 2 === 0 ? col * BUBBLE_SIZE + BUBBLE_SIZE / 2 : col * BUBBLE_SIZE + BUBBLE_SIZE;
+}
+
+function cellY(row) {
+  return row * ROW_HEIGHT + BUBBLE_SIZE / 2;
+}
+
+function neighborsOf(row, col) {
+  const even = row % 2 === 0;
+  const diag = even
+    ? [[row - 1, col - 1], [row - 1, col]]
+    : [[row - 1, col], [row - 1, col + 1]];
+  const diagDown = even
+    ? [[row + 1, col - 1], [row + 1, col]]
+    : [[row + 1, col], [row + 1, col + 1]];
+  return [[row, col - 1], [row, col + 1], ...diag, ...diagDown]
+    .filter(([r, c]) => c >= 0 && c < colsInRow(r) && r >= 0);
+}
+
+function key(row, col) { return `${row},${col}`; }
+
+// Builds a level's starting board: `rows` filled rows, each cell a
+// random color from a `colorCount`-color palette, using the level's
+// seeded RNG so it's reproducible.
+function createLevelBoard(levelNum) {
+  const { rows, colorCount, seed } = levelConfig(levelNum);
+  const rng = makeRng(seed);
+  const grid = new Map();
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < colsInRow(r); c++) {
+      grid.set(key(r, c), Math.floor(rng() * colorCount));
+    }
+  }
+  return grid;
+}
+
+// ---------------------------------------------------------------------
+// 2. BOARD LOGIC — pure functions operating on a Map<"r,c", colorIdx>
+// ---------------------------------------------------------------------
+
+function floodFillSameColor(grid, startRow, startCol) {
+  const color = grid.get(key(startRow, startCol));
+  if (color === undefined) return new Set();
+  const seen = new Set([key(startRow, startCol)]);
+  const stack = [[startRow, startCol]];
+  while (stack.length) {
+    const [r, c] = stack.pop();
+    for (const [nr, nc] of neighborsOf(r, c)) {
+      const k = key(nr, nc);
+      if (seen.has(k)) continue;
+      if (grid.get(k) === color) {
+        seen.add(k);
+        stack.push([nr, nc]);
+      }
+    }
+  }
+  return seen;
+}
+
+// Any bubble not connected (directly or transitively) to row 0 is a
+// "floater" and drops away — the classic bubble-shooter cascade after a
+// pop opens a hole in the middle of the cluster.
+function findFloaters(grid) {
+  const connected = new Set();
+  const stack = [];
+  for (let c = 0; c < colsInRow(0); c++) {
+    if (grid.has(key(0, c))) { connected.add(key(0, c)); stack.push([0, c]); }
+  }
+  while (stack.length) {
+    const [r, c] = stack.pop();
+    for (const [nr, nc] of neighborsOf(r, c)) {
+      const k = key(nr, nc);
+      if (!connected.has(k) && grid.has(k)) { connected.add(k); stack.push([nr, nc]); }
+    }
+  }
+  const floaters = new Set();
+  for (const k of grid.keys()) if (!connected.has(k)) floaters.add(k);
+  return floaters;
+}
+
+// Finds the nearest empty grid cell to a raw (x, y) pixel position —
+// used both to pick a landing cell after the trajectory ray-march stops,
+// and as a fallback if the exact stopping cell is already occupied.
+function nearestEmptyCell(grid, x, y) {
+  const approxRow = Math.max(0, Math.round(y / ROW_HEIGHT));
+  let best = null;
+  let bestDist = Infinity;
+  for (let r = Math.max(0, approxRow - 2); r <= approxRow + 2; r++) {
+    for (let c = 0; c < colsInRow(r); c++) {
+      if (grid.has(key(r, c))) continue;
+      const dx = cellX(r, c) - x;
+      const dy = cellY(r, c) - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestDist) { bestDist = d; best = [r, c]; }
+    }
+  }
+  return best || [approxRow, 0];
+}
+
+// Deterministic, instant ray-march: walks a straight line from the
+// shooter in small steps, bouncing off the left/right walls, and stops
+// the moment it would overlap an existing bubble or reach the ceiling.
+// Returns the landing [row, col] — no live simulation, no per-frame
+// state, just a computed answer the caller animates toward.
+function computeLanding(grid, startX, startY, angleRad) {
+  let x = startX, y = startY;
+  let vx = Math.sin(angleRad), vy = -Math.cos(angleRad);
+  const STEP = 4;
+  const R = BUBBLE_SIZE / 2;
+
+  for (let i = 0; i < 4000; i++) {
+    x += vx * STEP;
+    y += vy * STEP;
+
+    if (x <= R) { x = R; vx = Math.abs(vx); }
+    else if (x >= ARENA_WIDTH - R) { x = ARENA_WIDTH - R; vx = -Math.abs(vx); }
+
+    if (y <= R) return nearestEmptyCell(grid, x, R);
+
+    for (const [k, ] of grid) {
+      const [r, c] = k.split(",").map(Number);
+      const dx = cellX(r, c) - x;
+      const dy = cellY(r, c) - y;
+      if (dx * dx + dy * dy < BUBBLE_SIZE * BUBBLE_SIZE * 0.92) {
+        return nearestEmptyCell(grid, x, y);
+      }
+    }
+  }
+  return nearestEmptyCell(grid, x, y);
+}
+
+// ---------------------------------------------------------------------
+// 3. LOCALSTORAGE HELPERS
+// ---------------------------------------------------------------------
+
+function loadProgress() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PROGRESS_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { unlockedLevel: 1, stars: {} };
+}
+function saveProgress(p) { localStorage.setItem(PROGRESS_KEY, JSON.stringify(p)); }
+function loadTheme() { return localStorage.getItem(THEME_KEY) || "light"; }
+function loadPro() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRO_KEY));
+    if (raw) return raw;
+  } catch {}
+  return { owned: false };
+}
+function savePro(pro) { localStorage.setItem(PRO_KEY, JSON.stringify(pro)); }
+function loadPack() { return localStorage.getItem(PACK_KEY) || "candy"; }
+function savePack(id) { localStorage.setItem(PACK_KEY, id); }
+
+function playPop(n) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 500 + Math.min(n, 10) * 45;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.2);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.2);
+  } catch {}
+}
+function playThud() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "triangle";
+    osc.frequency.value = 220;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.12);
+  } catch {}
+}
+
+// ---------------------------------------------------------------------
+// 4. SMALL COMPONENTS
+// ---------------------------------------------------------------------
+
+function Confetti() {
+  const colors = ["#FF6EC7", "#FFA53E", "#67E8F9", "#86EFAC", "#ffffff"];
+  const pieces = Array.from({ length: 28 }, (_, i) => ({
+    id: i, left: Math.random() * 100, color: colors[i % colors.length],
+    delay: Math.random() * 0.3, duration: 1.4 + Math.random() * 0.8,
+  }));
+  return (
+    <>
+      {pieces.map((p) => (
+        <div key={p.id} className="confetti-piece" style={{ left: `${p.left}%`, background: p.color, animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s` }} />
+      ))}
+    </>
+  );
+}
+
+function UpgradeModal({ pro, pack, onPurchase, onSelectPack, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Bubblio Pro</h2>
+        {pro.owned ? (
+          <>
+            <p className="upgrade-copy">✓ Pro is unlocked on this device — thanks for supporting the app! Pick any bubble color pack:</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <button key={id} type="button" className={`pack-option ${pack === id ? "selected" : ""}`} onClick={() => onSelectPack(id)}>
+                  <div className="pack-swatch">{p.colors.slice(0, 4).map((c, i) => <span key={i} style={{ background: c[0] }} />)}</div>
+                  {p.name}
+                </button>
+              ))}
+            </div>
+            <div className="modal-buttons" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onClose}>Close</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="upgrade-copy">Unlock Pro for 3 extra bubble color packs — Sherbet, Neon, and Midnight. Purely cosmetic, never required to play.</p>
+            <div className="pack-grid">
+              {Object.entries(PALETTES).map(([id, p]) => (
+                <div key={id} className={`pack-option ${p.free ? "" : "locked"}`}>
+                  <div className="pack-swatch">{p.colors.slice(0, 4).map((c, i) => <span key={i} style={{ background: c[0] }} />)}</div>
+                  {p.name}{!p.free && " 🔒"}
+                </div>
+              ))}
+            </div>
+            <div className="modal-buttons-column" style={{ marginTop: 16 }}>
+              <button className="btn btn-primary" onClick={onPurchase}>Unlock Pro — {PRO_PRICE}</button>
+              <button className="btn btn-secondary" onClick={onClose}>Not now</button>
+            </div>
+          </>
+        )}
+        <p className="theme-note">Testing preview — this unlocks Pro locally on this device only; it isn't wired up to real payment yet. Real App Store/Play Store billing will replace this before launch.</p>
+      </div>
+    </div>
+  );
+}
+
+const BACKUP_KEYS = [PROGRESS_KEY, THEME_KEY, PRO_KEY, PACK_KEY];
+
+function BackupModal({ onClose }) {
+  const [status, setStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleDownload() {
+    const data = {};
+    BACKUP_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v !== null) data[k] = v; });
+    const payload = { app: "bubblio", exportedAt: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `bubblio-backup.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus({ type: "success", text: "Backup downloaded." });
+  }
+  function handleRestoreClick() { setStatus(null); if (fileInputRef.current) fileInputRef.current.click(); }
+  function handleFileChange(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try { parsed = JSON.parse(reader.result); } catch { setStatus({ type: "error", text: "That file isn't valid backup JSON." }); return; }
+      if (!parsed || parsed.app !== "bubblio" || typeof parsed.data !== "object" || parsed.data === null) {
+        setStatus({ type: "error", text: "That doesn't look like a Bubblio backup file." }); return;
+      }
+      const confirmed = window.confirm("This will replace everything currently on this device. Continue?");
+      if (!confirmed) return;
+      Object.keys(parsed.data).forEach((k) => localStorage.setItem(k, parsed.data[k]));
+      window.location.reload();
+    };
+    reader.onerror = () => setStatus({ type: "error", text: "Couldn't read that file. Try again." });
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        <h2>Backup & Restore</h2>
+        <p className="upgrade-copy">Save your level progress, stars, and settings to a file on your device — and bring it back later, even after reinstalling or switching phones.</p>
+        <label className="field-label">Download</label>
+        <button type="button" className="btn btn-primary" style={{ width: "100%", marginBottom: 18 }} onClick={handleDownload}>⬇ Download backup</button>
+        <label className="field-label">Restore</label>
+        <button type="button" className="btn btn-secondary" style={{ width: "100%" }} onClick={handleRestoreClick}>⬆ Restore from backup</button>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" className="backup-file-input" onChange={handleFileChange} />
+        {status && <p className={status.type === "error" ? "backup-status backup-status-error" : "backup-status backup-status-success"}>{status.text}</p>}
+        <div className="modal-buttons" style={{ marginTop: 20 }}>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+        <p className="theme-note">Free, always — this is your data, not a premium feature. Nothing leaves your device.</p>
+      </div>
+    </div>
+  );
+}
+
+function StarRow({ count }) {
+  return (
+    <div className="star-row">
+      {[1, 2, 3].map((i) => <span key={i} className={i <= count ? "star lit" : "star"}>★</span>)}
+    </div>
+  );
+}
+
+function LevelCompleteModal({ won, stars, shotsLeft, onNext, onRetry, hasNext }) {
+  return (
+    <div className="modal-overlay">
+      <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+        {won && <Confetti />}
+        <h2>{won ? "🎉 Level clear!" : "Out of shots"}</h2>
+        {won ? (
+          <>
+            <StarRow count={stars} />
+            <p className="upgrade-copy" style={{ textAlign: "center" }}>{shotsLeft} shot{shotsLeft === 1 ? "" : "s"} left over.</p>
+          </>
+        ) : (
+          <p className="upgrade-copy">Bubbles still on the board. Give it another go?</p>
+        )}
+        <div className="modal-buttons-column">
+          {won && hasNext && <button className="btn btn-primary" onClick={onNext}>▶ Next level</button>}
+          <button className={won ? "btn btn-secondary" : "btn btn-primary"} onClick={onRetry}>🔁 {won ? "Replay" : "Retry"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 5. BOARD / SHOOTER
+// ---------------------------------------------------------------------
+
+const SHOOTER_X = ARENA_WIDTH / 2;
+const SHOOTER_Y = ARENA_HEIGHT - 30;
+const FLIGHT_MS = 260;
+
+function Board({ grid, palette, flying, popping, falling, aimAngle, aiming, nextColor, onPointerDown, onPointerMove, onPointerUp }) {
+  const bubbles = [];
+  for (const [k, color] of grid) {
+    const [r, c] = k.split(",").map(Number);
+    const isPopping = popping.has(k);
+    const isFalling = falling.has(k);
+    bubbles.push(
+      <div
+        key={k}
+        className={`bubble ${isPopping ? "popping" : ""} ${isFalling ? "falling" : ""}`}
+        style={{ left: cellX(r, c) - BUBBLE_SIZE / 2, top: cellY(r, c) - BUBBLE_SIZE / 2, background: `linear-gradient(135deg, ${palette.colors[color][0]}, ${palette.colors[color][1]})` }}
+      >
+        <span className="bubble-shine" />
+      </div>
+    );
+  }
+
+  const aimLen = 140;
+  const aimX2 = SHOOTER_X + Math.sin(aimAngle) * aimLen;
+  const aimY2 = SHOOTER_Y - Math.cos(aimAngle) * aimLen;
+
+  return (
+    <div
+      className="board"
+      style={{ width: ARENA_WIDTH, height: ARENA_HEIGHT }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+    >
+      <div className="danger-line" style={{ top: cellY(CEILING_ROWS_VISIBLE) }} />
+      {bubbles}
+      {flying && (
+        <div
+          className="bubble flying"
+          style={{ left: flying.x - BUBBLE_SIZE / 2, top: flying.y - BUBBLE_SIZE / 2, background: `linear-gradient(135deg, ${palette.colors[flying.color][0]}, ${palette.colors[flying.color][1]})`, transition: flying.animate ? `left ${FLIGHT_MS}ms linear, top ${FLIGHT_MS}ms linear` : "none" }}
+        >
+          <span className="bubble-shine" />
+        </div>
+      )}
+      {aiming && (
+        <svg className="aim-line" width={ARENA_WIDTH} height={ARENA_HEIGHT}>
+          <line x1={SHOOTER_X} y1={SHOOTER_Y} x2={aimX2} y2={aimY2} strokeDasharray="6,6" />
+        </svg>
+      )}
+      <div className="shooter" style={{ left: SHOOTER_X - BUBBLE_SIZE / 2, top: SHOOTER_Y - BUBBLE_SIZE / 2, background: `linear-gradient(135deg, ${palette.colors[nextColor][0]}, ${palette.colors[nextColor][1]})` }}>
+        <span className="bubble-shine" />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// 6. APP
+// ---------------------------------------------------------------------
+
+const MAX_AIM_ANGLE = (75 * Math.PI) / 180;
+
+function App() {
+  const [theme, setTheme] = useState(loadTheme);
+  const [pro, setPro] = useState(loadPro);
+  const [packId, setPackId] = useState(loadPack);
+  const [progress, setProgress] = useState(loadProgress);
+  const [screen, setScreen] = useState("menu"); // "menu" | "play"
+  const [levelNum, setLevelNum] = useState(1);
+  const [grid, setGrid] = useState(() => new Map());
+  const [shotsLeft, setShotsLeft] = useState(0);
+  const [nextColor, setNextColor] = useState(0);
+  const [aiming, setAiming] = useState(false);
+  const [aimAngle, setAimAngle] = useState(0);
+  const [flying, setFlying] = useState(null);
+  const [popping, setPopping] = useState(new Set());
+  const [falling, setFalling] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState(null); // { won, stars }
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  useEffect(() => { savePro(pro); }, [pro]);
+  useEffect(() => { savePack(packId); }, [packId]);
+  useEffect(() => { saveProgress(progress); }, [progress]);
+
+  const palette = PALETTES[packId] && (PALETTES[packId].free || pro.owned) ? PALETTES[packId] : PALETTES.candy;
+
+  function startLevel(n) {
+    const cfg = levelConfig(n);
+    const rng = makeRng(cfg.seed + 999);
+    setGrid(createLevelBoard(n));
+    setLevelNum(n);
+    setShotsLeft(cfg.shots);
+    setNextColor(Math.floor(rng() * cfg.colorCount));
+    setOutcome(null);
+    setBusy(false);
+    setScreen("play");
+  }
+
+  function handlePointerDown(e) {
+    if (busy || outcome) return;
+    setAiming(true);
+    updateAim(e);
+  }
+  function handlePointerMove(e) {
+    if (!aiming) return;
+    updateAim(e);
+  }
+  function updateAim(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const scale = ARENA_WIDTH / rect.width;
+    const x = (e.clientX - rect.left) * scale;
+    const y = (e.clientY - rect.top) * scale;
+    let angle = Math.atan2(x - SHOOTER_X, SHOOTER_Y - y);
+    angle = Math.max(-MAX_AIM_ANGLE, Math.min(MAX_AIM_ANGLE, angle));
+    setAimAngle(angle);
+  }
+
+  function handlePointerUp() {
+    if (!aiming || busy || outcome) { setAiming(false); return; }
+    setAiming(false);
+    fireShot(aimAngle);
+  }
+
+  function fireShot(angle) {
+    const cfg = levelConfig(levelNum);
+    const [landRow, landCol] = computeLanding(grid, SHOOTER_X, SHOOTER_Y, angle);
+    const color = nextColor;
+    setBusy(true);
+    setFlying({ x: SHOOTER_X, y: SHOOTER_Y, color, animate: false });
+
+    nextTick(() => {
+      setFlying({ x: cellX(landRow, landCol), y: cellY(landRow, landCol), color, animate: true });
+      setTimeout(() => resolveShot(landRow, landCol, color), FLIGHT_MS + 20);
+    });
+
+    const rng = makeRng(cfg.seed + 1000 + (cfg.shots - shotsLeft));
+    setNextColor(Math.floor(rng() * cfg.colorCount));
+    setShotsLeft((s) => s - 1);
+  }
+
+  // A short setTimeout delay so the flying bubble's initial position
+  // commits before the CSS transition target changes (otherwise the
+  // browser may coalesce both style writes into one frame and skip the
+  // animation). Deliberately NOT requestAnimationFrame: rAF never fires
+  // while the tab is backgrounded/hidden (confirmed while building
+  // Brobots), which would silently freeze every shot mid-flight forever
+  // for anyone who fires a shot and switches tabs, and made this exact
+  // bug invisible to automated testing in a hidden browser pane.
+  // setTimeout has no such restriction.
+  function nextTick(cb) {
+    setTimeout(cb, 20);
+  }
+
+  function resolveShot(row, col, color) {
+    setFlying(null);
+    const next = new Map(grid);
+    next.set(key(row, col), color);
+
+    const group = floodFillSameColor(next, row, col);
+    if (group.size >= 3) {
+      playPop(group.size);
+      setPopping(group);
+      setTimeout(() => {
+        const afterPop = new Map(next);
+        for (const k of group) afterPop.delete(k);
+        const floaters = findFloaters(afterPop);
+        setPopping(new Set());
+        if (floaters.size > 0) {
+          setFalling(floaters);
+          setTimeout(() => {
+            const afterFall = new Map(afterPop);
+            for (const k of floaters) afterFall.delete(k);
+            setFalling(new Set());
+            finishTurn(afterFall);
+          }, 260);
+        } else {
+          finishTurn(afterPop);
+        }
+      }, 240);
+    } else {
+      playThud();
+      finishTurn(next);
+    }
+  }
+
+  function finishTurn(nextGrid) {
+    setGrid(nextGrid);
+    setBusy(false);
+    if (nextGrid.size === 0) {
+      const cfg = levelConfig(levelNum);
+      const remaining = shotsLeft;
+      const stars = remaining >= cfg.shots * 0.5 ? 3 : remaining >= cfg.shots * 0.2 ? 2 : 1;
+      setOutcome({ won: true, stars });
+      setProgress((p) => ({
+        unlockedLevel: Math.max(p.unlockedLevel, Math.min(levelNum + 1, TOTAL_LEVELS)),
+        stars: { ...p.stars, [levelNum]: Math.max(p.stars[levelNum] || 0, stars) },
+      }));
+      return;
+    }
+    // Any bubble that has reached the danger line ends the level, same
+    // "screen fills up" failure as Brobots, scaled to this grid.
+    const tooHigh = [...nextGrid.keys()].some((k) => Number(k.split(",")[0]) >= CEILING_ROWS_VISIBLE);
+    if (shotsLeft <= 0 || tooHigh) {
+      setOutcome({ won: false, stars: 0 });
+    }
+  }
+
+  function handleNext() { startLevel(Math.min(levelNum + 1, TOTAL_LEVELS)); }
+  function handleRetry() { startLevel(levelNum); }
+  function handlePurchasePro() { setPro({ owned: true }); }
+  function handleSelectPack(id) { if (PALETTES[id].free || pro.owned) setPackId(id); }
+
+  const totalStars = Object.values(progress.stars).reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="app">
+      <header className="app-header">
+        <h1 className="app-title">
+          <span className="logo">🫧</span> Bubblio
+        </h1>
+        <div className="header-buttons">
+          <button className="theme-toggle" onClick={() => setUpgradeModalOpen(true)} aria-label="Bubblio Pro">{pro.owned ? "⭐" : "👑"}</button>
+          <button className="theme-toggle" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} aria-label="Toggle dark mode">{theme === "light" ? "🌙" : "☀️"}</button>
+          <button className="theme-toggle" onClick={() => setBackupModalOpen(true)} aria-label="Backup & Restore">💾</button>
+        </div>
+      </header>
+
+      {screen === "menu" ? (
+        <div className="level-select">
+          <p className="stats-row">⭐ {totalStars} total stars · {progress.unlockedLevel < TOTAL_LEVELS ? `${progress.unlockedLevel}/${TOTAL_LEVELS} unlocked` : "all levels unlocked"}</p>
+          <div className="level-grid">
+            {Array.from({ length: TOTAL_LEVELS }, (_, i) => i + 1).map((n) => {
+              const locked = n > progress.unlockedLevel;
+              const stars = progress.stars[n] || 0;
+              return (
+                <button key={n} className={`level-tile ${locked ? "locked" : ""}`} disabled={locked} onClick={() => startLevel(n)}>
+                  <span className="level-num">{locked ? "🔒" : n}</span>
+                  {!locked && <StarRow count={stars} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="score-row">
+            <div className="score-box">
+              <span className="score-label">Level</span>
+              <span className="score-value">{levelNum}</span>
+            </div>
+            <div className="score-box">
+              <span className="score-label">Shots</span>
+              <span className={`score-value ${shotsLeft <= 3 ? "low" : ""}`}>{shotsLeft}</span>
+            </div>
+            <div className="score-box">
+              <span className="score-label">Bubbles</span>
+              <span className="score-value best">{grid.size}</span>
+            </div>
+          </div>
+          <p className="instructions">Drag to aim, release to shoot. Match 3+ to pop!</p>
+          <Board
+            grid={grid}
+            palette={palette}
+            flying={flying}
+            popping={popping}
+            falling={falling}
+            aimAngle={aimAngle}
+            aiming={aiming}
+            nextColor={nextColor}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+          />
+          <button className="link-btn back-btn" onClick={() => setScreen("menu")}>← Level select</button>
+        </>
+      )}
+
+      {outcome && (
+        <LevelCompleteModal
+          won={outcome.won}
+          stars={outcome.stars}
+          shotsLeft={shotsLeft}
+          hasNext={levelNum < TOTAL_LEVELS}
+          onNext={handleNext}
+          onRetry={handleRetry}
+        />
+      )}
+
+      {upgradeModalOpen && (
+        <UpgradeModal pro={pro} pack={packId} onPurchase={handlePurchasePro} onSelectPack={handleSelectPack} onClose={() => setUpgradeModalOpen(false)} />
+      )}
+      {backupModalOpen && <BackupModal onClose={() => setBackupModalOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+
+</body>
+</html>
