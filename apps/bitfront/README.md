@@ -53,12 +53,24 @@ sprites.js        every pixel of art, generated at load time — no images
 data.js           the maps, all 20 waves, and every balance number
 game.js           simulation, rendering, input, HUD, audio
 validate-maps.js  checks every map against the rules the engine assumes
+playtest.js       scripted bot that plays full runs, for balance regressions
 manifest.json     PWA metadata so phones can install it
 sw.js             service worker: caches the shell, runs offline
 generate-icons.js writes the PNG icons from a 16x16 drawing (node, no deps)
+sync-www.js       assembles www/ for the native build, shell files only
+capacitor.config.json  native shell config (appId still needs confirming)
 MONETIZATION.md   proposal: how this might make money, and in what order
 icon-*.png        app icons, produced by that script
+
+release/          shipping: itch.io page copy, store metadata, screenshots,
+                  privacy + support pages, and check-metadata.js
+ci/               a GitHub workflow, parked rather than installed — the
+                  root .github/ is outside this app's folder
 ```
+
+Nothing here has a build step or a dependency. `npm install` is only needed
+if you go as far as generating the native projects; every script in the list
+above runs on a bare `node`.
 
 `sprites.js`, `data.js` and `game.js` are plain classic scripts loaded in
 dependency order. They're separate files (rather than inlined like the React
@@ -103,12 +115,13 @@ the painted road and the "can't build here" rule can never disagree.
 | rock | 5 | 18 |
 | buildable ground in turret range of the road | 193 tiles | 179 |
 
-Coldgate is the kinder of the two, and the blurb in-game says so: the extra
-six tiles of road buy more seconds under fire than the extra rock and the
-missing fifth patch take away. That's measured, not guessed — the scripted
-bot (see Balance notes) dies around wave 17 on Ironrun and reaches wave 20
-on Coldgate. A gentler second map is useful; a dishonestly labelled one
-isn't.
+Coldgate is meant to be the kinder of the two, and the blurb in-game says
+so: the extra six tiles of road buy more seconds under fire than the extra
+rock and the missing fifth patch take away. Measured over 12 seeded bot runs
+per map (see Balance notes) the difference is real but **thin** — both maps
+give a median of 19 waves cleared, and the only run that held the pass was
+on Coldgate. It needs 26 buildings there against 36 on Ironrun, which is the
+clearer tell: Coldgate asks for less to reach the same place.
 
 Best-wave records are kept per map, since surviving to wave 14 on Coldgate
 says nothing about your Ironrun run.
@@ -187,10 +200,28 @@ coasting on kill income.
 
 The numbers were tuned against a scripted bot that plays the whole run
 (places turrets to maximise road coverage, buys extractors, upgrades when it
-runs out of ground). With the current tables that bot dies around **wave
-15-17** on Ironrun and reaches **wave 20** on Coldgate — roughly where a
-mediocre-but-sensible human should land: winnable, but you have to use cryo,
-air cover and the rally flag properly to finish all 20.
+runs out of ground). That bot is in the repo, so the claim below is one you
+can re-run rather than one you have to take on faith:
+
+```bash
+node playtest.js --runs 12
+```
+
+It opens the real `game.js` in a stub DOM, seeds `Math.random` so a run is
+reproducible, and fails with a non-zero exit if either map falls outside the
+band in `EXPECT`. With the current tables, over 12 seeds per map: a **median
+of 19 waves cleared on both maps**, one run in 24 holding the pass, and
+almost every loss happening on wave 20 itself.
+
+That last part is the thing to know about this game's difficulty: **wave 20
+is a cliff, not a slope.** The bot reaches KRUUG AND VOSK nearly every time
+and then dies to it, with a spread of one or two waves across a dozen seeds.
+Whether that's a good final exam or a wall that wants sanding down is a
+design call, not a bug — but it means "how hard is Bitfront" is really the
+question "how hard is the last wave".
+
+The bot is a floor, not a target: it never calls a wave early, never sells,
+and never re-sites a turret. A human using those three should beat it.
 
 Air waves (wave 6, 12, 17, 19) deserve a note: flyers **cut every other
 corner** off the road rather than beelining for the HQ. The beeline version

@@ -1,0 +1,19 @@
+{
+  "appId": "com.hotstreakhabits.bitfront",
+  "appName": "Bitfront",
+  "webDir": "www",
+  "backgroundColor": "#12101aff",
+  "android": {
+    "backgroundColor": "#12101aff"
+  },
+  "ios": {
+    "contentInset": "always",
+    "backgroundColor": "#12101aff"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "backgroundColor": "#12101aff"
+    }
+  }
+}

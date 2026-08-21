@@ -1,0 +1,63 @@
+# =====================================================================
+# Bitfront — checks
+#
+# Not installed. This file lives inside apps/bitfront because this app was
+# scoped to its own folder; GitHub only runs workflows from .github/workflows
+# at the repository root. See ci/README.md for the one command that installs
+# it.
+#
+# What it protects: the map invariants the engine assumes but never checks
+# at runtime, the balance of the wave tables, and the two store fields whose
+# length limits have failed real uploads.
+# =====================================================================
+
+name: bitfront
+
+on:
+  push:
+    paths:
+      - "apps/bitfront/**"
+      - ".github/workflows/bitfront-checks.yml"
+  pull_request:
+    paths:
+      - "apps/bitfront/**"
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/bitfront
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No install step on purpose: every script here is dependency-free,
+      # and the game itself has no build.
+
+      - name: Maps obey the rules the engine assumes
+        run: node validate-maps.js
+
+      - name: Every script parses
+        run: |
+          for f in data.js sprites.js game.js validate-maps.js playtest.js sync-www.js generate-icons.js release/check-metadata.js; do
+            node --check "$f"
+          done
+
+      - name: Store metadata is within Apple's length limits
+        run: node release/check-metadata.js
+
+      # The slow one, and the point of the workflow: plays five full seeded
+      # runs on each map and fails if either falls outside the band in
+      # EXPECT. A balance change that breaks the run shows up here.
+      - name: Balance holds
+        run: node playtest.js --runs 5
+
+      - name: The native build assembles
+        run: node sync-www.js

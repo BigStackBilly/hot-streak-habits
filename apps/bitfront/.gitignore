@@ -1,0 +1,8 @@
+# Capacitor: generated from the files above, never edited by hand.
+node_modules/
+www/
+ios/
+android/
+
+# Build output for the itch.io upload — rebuilt by the command in release/ITCH.md.
+release/*.zip

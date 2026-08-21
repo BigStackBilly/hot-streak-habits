@@ -1,0 +1,21 @@
+{
+  "name": "bitfront",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A pixel-art RTS tower defence. Hold the pass for 20 waves.",
+  "scripts": {
+    "validate": "node validate-maps.js",
+    "playtest": "node playtest.js --runs 12",
+    "test": "node validate-maps.js && node playtest.js --runs 5",
+    "www": "node sync-www.js",
+    "sync": "node sync-www.js && npx cap sync"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  }
+}
