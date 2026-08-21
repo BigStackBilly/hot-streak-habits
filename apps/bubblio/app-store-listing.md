@@ -28,6 +28,7 @@ Drag to aim, release to fire the bubble waiting at the bottom. Land it next to m
 WHY IT'S DIFFERENT
 
 - 30 real levels, each with its own board and shot budget — not just one endless mode
+- An honest aim guide — the line shows exactly where your shot lands, wall bounces included, not just the direction you're pulling
 - Earn 1-3 stars per level based on how efficiently you clear it, with your best result always saved
 - No login, no account, no cloud — everything stays on your device
 - No ads, no tracking, nothing sold

@@ -244,33 +244,41 @@ function nearestEmptyCell(grid, x, y) {
 // Deterministic, instant ray-march: walks a straight line from the
 // shooter in small steps, bouncing off the left/right walls, and stops
 // the moment it would overlap an existing bubble or reach the ceiling.
-// Returns the landing [row, col] — no live simulation, no per-frame
-// state, just a computed answer the caller animates toward.
-function computeLanding(grid, startX, startY, angleRad) {
+// Returns both the landing [row, col] and every wall-bounce point along
+// the way, so the same walk can drive the real shot (computeLanding)
+// AND the aim-preview line (which needs the bounce points to draw an
+// accurate path, not just the endpoint) without duplicating the physics
+// in two places that could drift out of sync.
+function walkTrajectory(grid, startX, startY, angleRad) {
   let x = startX, y = startY;
   let vx = Math.sin(angleRad), vy = -Math.cos(angleRad);
   const STEP = 4;
   const R = BUBBLE_SIZE / 2;
+  const bounces = [];
 
   for (let i = 0; i < 4000; i++) {
     x += vx * STEP;
     y += vy * STEP;
 
-    if (x <= R) { x = R; vx = Math.abs(vx); }
-    else if (x >= ARENA_WIDTH - R) { x = ARENA_WIDTH - R; vx = -Math.abs(vx); }
+    if (x <= R) { x = R; vx = Math.abs(vx); bounces.push({ x, y }); }
+    else if (x >= ARENA_WIDTH - R) { x = ARENA_WIDTH - R; vx = -Math.abs(vx); bounces.push({ x, y }); }
 
-    if (y <= R) return nearestEmptyCell(grid, x, R);
+    if (y <= R) return { landing: nearestEmptyCell(grid, x, R), bounces };
 
     for (const [k, ] of grid) {
       const [r, c] = k.split(",").map(Number);
       const dx = cellX(r, c) - x;
       const dy = cellY(r, c) - y;
       if (dx * dx + dy * dy < BUBBLE_SIZE * BUBBLE_SIZE * 0.92) {
-        return nearestEmptyCell(grid, x, y);
+        return { landing: nearestEmptyCell(grid, x, y), bounces };
       }
     }
   }
-  return nearestEmptyCell(grid, x, y);
+  return { landing: nearestEmptyCell(grid, x, y), bounces };
+}
+
+function computeLanding(grid, startX, startY, angleRad) {
+  return walkTrajectory(grid, startX, startY, angleRad).landing;
 }
 
 // ---------------------------------------------------------------------
@@ -507,9 +515,21 @@ function Board({ grid, palette, flying, popping, falling, aimAngle, aiming, next
     );
   }
 
-  const aimLen = 140;
-  const aimX2 = SHOOTER_X + Math.sin(aimAngle) * aimLen;
-  const aimY2 = SHOOTER_Y - Math.cos(aimAngle) * aimLen;
+  // The aim line shows the REAL predicted path, wall bounces included,
+  // by running the same walkTrajectory the actual shot uses -- not just
+  // a fixed-length straight line in the aim direction. A straight
+  // preview would be actively misleading near the side walls, where
+  // most shots bounce at least once before landing.
+  let aimPoints = null;
+  if (aiming) {
+    const { landing, bounces } = walkTrajectory(grid, SHOOTER_X, SHOOTER_Y, aimAngle);
+    const [landRow, landCol] = landing;
+    aimPoints = [
+      { x: SHOOTER_X, y: SHOOTER_Y },
+      ...bounces,
+      { x: cellX(landRow, landCol), y: cellY(landRow, landCol) },
+    ];
+  }
 
   return (
     <div
@@ -530,9 +550,10 @@ function Board({ grid, palette, flying, popping, falling, aimAngle, aiming, next
           <span className="bubble-shine" />
         </div>
       )}
-      {aiming && (
+      {aimPoints && (
         <svg className="aim-line" width={ARENA_WIDTH} height={ARENA_HEIGHT}>
-          <line x1={SHOOTER_X} y1={SHOOTER_Y} x2={aimX2} y2={aimY2} strokeDasharray="6,6" />
+          <polyline points={aimPoints.map((p) => `${p.x},${p.y}`).join(" ")} strokeDasharray="6,6" fill="none" />
+          <circle className="aim-landing-dot" cx={aimPoints[aimPoints.length - 1].x} cy={aimPoints[aimPoints.length - 1].y} r={BUBBLE_SIZE / 2 - 2} />
         </svg>
       )}
       <div className="shooter" style={{ left: SHOOTER_X - BUBBLE_SIZE / 2, top: SHOOTER_Y - BUBBLE_SIZE / 2, background: `linear-gradient(135deg, ${palette.colors[nextColor][0]}, ${palette.colors[nextColor][1]})` }}>
