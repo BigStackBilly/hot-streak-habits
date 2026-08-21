@@ -506,6 +506,7 @@ function App() {
   const [parMoves, setParMoves] = useState(0);
   const [selected, setSelected] = useState(null);
   const [moves, setMoves] = useState(0);
+  const [history, setHistory] = useState([]);
   const [won, setWon] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
@@ -526,6 +527,7 @@ function App() {
     setParMoves(newPar);
     setLevelNum(n);
     setMoves(0);
+    setHistory([]);
     setSelected(null);
     setWon(false);
     setScreen("play");
@@ -545,6 +547,7 @@ function App() {
     if (canPour(board[selected], board[idx])) {
       playPour();
       const next = pour(board, selected, idx);
+      setHistory((h) => [...h, board]);
       setBoard(next);
       setSelected(null);
       setMoves((m) => m + 1);
@@ -561,6 +564,20 @@ function App() {
       playThud();
       setSelected(board[idx].length === 0 ? null : idx);
     }
+  }
+
+  // Undoing is free (doesn't cost a move going backward, but the
+  // reversed move still counts toward `moves` going forward again if
+  // re-poured) -- it's a convenience for misclicks and backtracking a
+  // plan, not a way to game the star rating, so it only rewinds the
+  // board + move counter and is unavailable once a level is won.
+  function handleUndo() {
+    if (history.length === 0 || won) return;
+    const prev = history[history.length - 1];
+    setBoard(prev);
+    setHistory((h) => h.slice(0, -1));
+    setMoves((m) => Math.max(0, m - 1));
+    setSelected(null);
   }
 
   function handleNext() { startLevel(Math.min(levelNum + 1, TOTAL_LEVELS)); }
@@ -614,7 +631,10 @@ function App() {
           </div>
           <p className="instructions">Tap a tube, then tap another to pour. Sort each color into its own tube!</p>
           <Board board={board} selected={selected} palette={palette} onTap={handleTap} />
-          <button className="link-btn back-btn" onClick={() => setScreen("menu")}>← Level select</button>
+          <div className="play-footer">
+            <button className="link-btn" onClick={() => setScreen("menu")}>← Level select</button>
+            <button className="link-btn" onClick={handleUndo} disabled={history.length === 0 || won}>↩ Undo</button>
+          </div>
         </>
       )}
 

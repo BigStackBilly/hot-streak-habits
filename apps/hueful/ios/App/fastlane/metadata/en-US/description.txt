@@ -7,6 +7,7 @@ Tap a tube to pick it up, tap another to pour into it — a pour only works if t
 WHY IT'S DIFFERENT
 
 - 30 real levels, each generated from an already-solved board — so every single one is guaranteed solvable, never a dead end
+- Unlimited undo for misclicks and backtracking, no penalty beyond giving the move back
 - Earn 1-3 stars per level based on how few pours you use, with your best result always saved
 - No login, no account, no cloud — everything stays on your device
 - No ads, no tracking, nothing sold

@@ -299,11 +299,11 @@ button {
   box-shadow: inset 0 -2px 4px rgba(0, 0, 0, 0.15);
 }
 
-.back-btn {
+.play-footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
   margin-top: 18px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--brand-1);
 }
 
 /* ---------- Modal (shared with sibling apps) ---------- */
@@ -464,7 +464,14 @@ button {
 .link-btn {
   color: var(--brand-1);
   font-weight: 700;
+  font-size: 13px;
   text-decoration: underline;
+}
+
+.link-btn:disabled {
+  color: var(--text-dim);
+  opacity: 0.5;
+  text-decoration: none;
 }
 
 /* ---------- Confetti ---------- */
