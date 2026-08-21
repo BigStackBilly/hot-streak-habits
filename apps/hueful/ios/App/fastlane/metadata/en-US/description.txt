@@ -1,0 +1,22 @@
+Hueful is a color-sort puzzle: pour colors between tubes until every tube holds just one color.
+
+HOW TO PLAY
+
+Tap a tube to pick it up, tap another to pour into it — a pour only works if the destination is empty or already topped with the same color. Use the spare empty tubes to untangle the mix. Sort every color into its own tube to clear the level.
+
+WHY IT'S DIFFERENT
+
+- 30 real levels, each generated from an already-solved board — so every single one is guaranteed solvable, never a dead end
+- Earn 1-3 stars per level based on how few pours you use, with your best result always saved
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- No lives to wait out, no energy timer, no forced ads between levels
+- Optional cosmetic color packs (Pastel, Neon, Midnight) if you want to customize the look — entirely optional, never required
+- Free local backup and restore, so your level progress is never trapped on one device
+- Dark mode
+
+BUILT TO STAY OUT OF YOUR WAY
+
+Tap in, sort a level, tap out — no forced tutorials, no popups begging for a review.
+
+Pour your first tube today.

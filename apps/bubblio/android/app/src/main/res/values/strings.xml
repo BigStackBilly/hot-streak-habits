@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Bubblio</string>
+    <string name="title_activity_main">Bubblio</string>
+    <string name="package_name">com.Niloc.bubblio</string>
+    <string name="custom_url_scheme">com.Niloc.bubblio</string>
+</resources>

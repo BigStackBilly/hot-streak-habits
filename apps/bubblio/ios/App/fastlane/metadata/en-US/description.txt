@@ -1,0 +1,22 @@
+Bubblio is a classic bubble-shooter puzzle: aim, shoot, and pop groups of 3 or more matching bubbles before you run out of shots.
+
+HOW TO PLAY
+
+Drag to aim, release to fire the bubble waiting at the bottom. Land it next to matching colors to pop a group — and watch any bubbles left floating with nothing holding them up drop away too. Clear every bubble on the board before your shots run out to finish the level.
+
+WHY IT'S DIFFERENT
+
+- 30 real levels, each with its own board and shot budget — not just one endless mode
+- Earn 1-3 stars per level based on how efficiently you clear it, with your best result always saved
+- No login, no account, no cloud — everything stays on your device
+- No ads, no tracking, nothing sold
+- No lives to wait out, no energy timer, no forced ads between levels
+- Optional cosmetic bubble color packs (Sherbet, Neon, Midnight) if you want to customize the look — entirely optional, never required
+- Free local backup and restore, so your level progress is never trapped on one device
+- Dark mode
+
+BUILT TO STAY OUT OF YOUR WAY
+
+Tap in, clear a level, tap out — no forced tutorials, no popups begging for a review.
+
+Pop your first bubble today.

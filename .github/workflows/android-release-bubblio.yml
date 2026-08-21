@@ -1,0 +1,82 @@
+name: Android Release (Bubblio)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/bubblio
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync Capacitor web assets into the native project
+        run: npm run sync
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache upload keystore
+        id: keystore-cache
+        uses: actions/cache@v4
+        with:
+          path: apps/bubblio/android/upload-keystore.jks
+          key: android-upload-keystore-bubblio-v1
+
+      - name: Generate upload keystore (first run only)
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        working-directory: apps/bubblio/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          keytool -genkeypair -v \
+            -storetype JKS \
+            -keystore upload-keystore.jks \
+            -alias "$ANDROID_KEY_ALIAS" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -keypass "$ANDROID_KEY_PASSWORD" \
+            -dname "CN=Bubblio, OU=Niloc, O=Niloc, L=NA, ST=NA, C=US"
+
+      - name: Build signed release AAB
+        working-directory: apps/bubblio/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          ./gradlew bundleRelease \
+            -Pandroid.injected.signing.store.file=upload-keystore.jks \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+
+      - name: Upload to Play Console (internal testing track)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+      - name: Run fastlane supply
+        working-directory: apps/bubblio/android
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          gem install fastlane
+          echo "$PLAY_SERVICE_ACCOUNT_JSON" > play-service-account.json
+          fastlane supply \
+            --package_name com.Niloc.bubblio \
+            --aab app/build/outputs/bundle/release/app-release.aab \
+            --json_key play-service-account.json \
+            --track internal
