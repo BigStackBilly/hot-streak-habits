@@ -1,0 +1,565 @@
+/* =====================================================================
+   BITFRONT — styles.css
+
+   The HUD is deliberately a *frame around* the game rather than drawn
+   inside it: text at 384x208 would be unreadable mush, and a chunky
+   riveted console border is what an RTS looks like anyway.
+
+   Palette is the same one sprites.js uses, so the DOM and the canvas can't
+   drift apart:
+     ink      #12101a   outline / background
+     panel    #1b1a29 / #24263a
+     steel    #3d445e / #5f6987
+     blue     #3f7fe0   player / interactive
+     gold     #f7e04c   minerals / upgrades
+     red      #cf3b3b   danger
+   ===================================================================== */
+
+:root {
+  --ink: #12101a;
+  --ink-2: #1b1a29;
+  --panel: #24263a;
+  --steel: #3d445e;
+  --steel-lit: #5f6987;
+  --text: #c9d3e8;
+  --dim: #8f9ab8;
+  --blue: #3f7fe0;
+  --blue-lit: #8fd0ff;
+  --gold: #f7e04c;
+  --gold-dim: #d9a52b;
+  --red: #cf3b3b;
+  --green: #52b85e;
+  --violet: #a86bff;
+  --pixel: "Press Start 2P", ui-monospace, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--pixel);
+  /* Scanline-ish backdrop so the letterboxing around the map isn't dead space. */
+  background-image:
+    radial-gradient(circle at 50% 0%, #221f36 0%, #12101a 60%),
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0 1px, transparent 1px 3px);
+  -webkit-font-smoothing: none;
+  overflow-x: hidden;
+}
+
+body { overscroll-behavior: none; }
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* Shared "riveted metal panel" look. */
+.panel, #topbar, #dock > *, #sel-panel {
+  background: linear-gradient(#24263a, #1b1a29);
+  border: 2px solid var(--steel);
+  box-shadow: inset 0 2px 0 #3d445e, inset 0 -2px 0 #12101a, 0 2px 0 #0b0a12;
+}
+
+/* ============================ TOP BAR ============================ */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.brand { display: flex; flex-direction: column; gap: 3px; margin-right: 4px; }
+
+.logo {
+  font-size: 17px;
+  color: var(--gold);
+  letter-spacing: 1px;
+  /* Hard offset shadow instead of a blur — blurs look wrong next to pixels. */
+  text-shadow: 2px 2px 0 #7a1f2e, 4px 4px 0 rgba(0,0,0,0.5);
+}
+
+.mapname { font-size: 7px; color: var(--dim); letter-spacing: 1px; }
+
+.stats { display: flex; gap: 10px; flex: 1; flex-wrap: wrap; }
+
+.stat {
+  min-width: 104px;
+  padding: 4px 8px;
+  background: rgba(18,16,26,0.55);
+  border: 1px solid var(--steel);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stat-label { font-size: 6px; color: var(--dim); letter-spacing: 1px; }
+.stat-value { font-size: 13px; color: var(--text); }
+.stat-sub { font-size: 6px; color: var(--dim); }
+
+.minerals-stat .stat-value { color: var(--gold); }
+.minerals-stat .stat-sub { color: var(--violet); }
+
+.hq-bar {
+  height: 6px;
+  background: #3a1520;
+  border: 1px solid var(--ink);
+  overflow: hidden;
+}
+.hq-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--green);
+  transition: width 0.2s steps(6);
+}
+
+.controls { display: flex; gap: 6px; }
+
+.ctl, #send-wave, .act, #ov-btn, .bld {
+  font-family: var(--pixel);
+  color: var(--text);
+  background: linear-gradient(#3d445e, #24263a);
+  border: 2px solid var(--steel-lit);
+  box-shadow: inset 0 1px 0 #8f9ab8, 0 2px 0 #0b0a12;
+  cursor: pointer;
+  transition: transform 0.04s linear, filter 0.1s linear;
+}
+.ctl:hover, #send-wave:hover:not(:disabled), .act:hover, #ov-btn:hover, .bld:hover {
+  filter: brightness(1.22);
+}
+.ctl:active, #send-wave:active, .act:active, #ov-btn:active, .bld:active {
+  transform: translateY(2px);
+  box-shadow: inset 0 1px 0 #8f9ab8;
+}
+
+.ctl { font-size: 8px; padding: 8px 9px; }
+.ctl.active { background: linear-gradient(#3f7fe0, #24509c); border-color: var(--blue-lit); }
+
+/* ============================= STAGE ============================= */
+#stage { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+
+#screen {
+  position: relative;
+  padding: 6px;
+  background: #0b0a12;
+  border: 3px solid var(--steel);
+  box-shadow: inset 0 0 0 2px #12101a, 0 0 0 2px #0b0a12, 0 6px 24px rgba(0,0,0,0.6);
+  line-height: 0;
+}
+
+#game {
+  display: block;
+  /* The whole point: no interpolation, ever. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+#info-line {
+  margin: 0;
+  font-size: 8px;
+  color: var(--dim);
+  text-align: center;
+  min-height: 12px;
+  letter-spacing: 0.5px;
+}
+#info-line.bad { color: var(--red); }
+
+/* ===================== COMMS CHANNEL =====================
+   Advisor lines stacked in the bottom-left of the map. Overlaid rather than
+   docked so it costs no vertical space — the canvas already fights for every
+   pixel of height to keep its integer scale. */
+#comms {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  pointer-events: none;
+  line-height: 1.5;
+}
+
+.comms-line {
+  font-size: 7px;
+  color: var(--text);
+  /* A dark plate behind each line. An outline alone was tried first and
+     isn't enough: a 1px font stroke against bright grass, with black on all
+     four sides of it, just turns to mush at small map scales. */
+  background: rgba(11, 10, 18, 0.72);
+  border-left: 2px solid var(--steel-lit);
+  padding: 3px 5px 2px;
+  text-shadow: 1px 1px 0 #000;
+  opacity: 0;
+  animation: commsIn 0.18s steps(3) forwards;
+  align-self: flex-start;
+  /* Never wrap: a two-line advisor message pushes the stack up the map and
+     turns a glance into reading. */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* At 1x and 2x the map is physically small, so keep the channel to the last
+   two lines rather than covering the road with chatter. */
+#screen[data-scale="1"] .comms-line:nth-last-child(n + 3),
+#screen[data-scale="2"] .comms-line:nth-last-child(n + 4) {
+  display: none;
+}
+.comms-line.good { color: var(--gold); border-left-color: var(--gold-dim); }
+.comms-line.bad { color: #ff8a8a; border-left-color: var(--red); }
+.comms-line.out { animation: commsOut 0.4s steps(4) forwards; }
+
+@keyframes commsIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes commsOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* Wave-incoming banner, drawn over the map. */
+#banner {
+  position: absolute;
+  left: 0; right: 0;
+  top: 34%;
+  text-align: center;
+  font-size: 15px;
+  color: var(--gold);
+  text-shadow: 3px 3px 0 #12101a;
+  opacity: 0;
+  pointer-events: none;
+  line-height: 1.4;
+  transition: opacity 0.25s linear;
+}
+#banner.show { opacity: 1; animation: bannerPop 1.8s steps(12) forwards; }
+#banner.boss { color: var(--red); font-size: 17px; }
+
+@keyframes bannerPop {
+  0%   { transform: scale(0.85); opacity: 0; }
+  12%  { transform: scale(1); opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ============================ OVERLAY ============================ */
+#overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11,10,18,0.86);
+  padding: 12px;
+  line-height: 1.5;
+}
+#overlay.show { display: flex; }
+
+.ov-card {
+  max-width: 640px;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 18px;
+  background: linear-gradient(#24263a, #1b1a29);
+  border: 3px solid var(--steel-lit);
+  box-shadow: inset 0 2px 0 #5f6987, 0 4px 0 #0b0a12;
+  text-align: center;
+}
+
+#ov-title {
+  margin: 0 0 10px;
+  font-size: 22px;
+  color: var(--gold);
+  text-shadow: 3px 3px 0 #7a1f2e, 6px 6px 0 rgba(0,0,0,0.45);
+  letter-spacing: 2px;
+}
+
+#ov-body { font-size: 9px; color: var(--text); }
+.ov-card .tag { color: var(--blue-lit); font-size: 9px; margin: 0 0 12px; }
+
+/* ---- daily challenge panel ---- */
+.daily {
+  border: 2px solid var(--gold-dim);
+  background: rgba(217, 165, 43, 0.08);
+  padding: 10px;
+  margin: 0 0 12px;
+  text-align: left;
+}
+.daily-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 7px; }
+.daily-title { font-size: 8px; color: var(--gold); letter-spacing: 1px; }
+.daily-streak { font-size: 7px; color: var(--dim); }
+.daily-body { font-size: 7px; line-height: 1.8; color: var(--text); }
+.daily-body b { color: var(--blue-lit); }
+.daily-mods { color: var(--dim); font-size: 6px; line-height: 1.9; margin-top: 4px; }
+.daily-go {
+  font-family: var(--pixel);
+  width: 100%;
+  margin-top: 9px;
+  padding: 9px 6px;
+  font-size: 8px;
+  cursor: pointer;
+  color: #12101a;
+  background: linear-gradient(#f7e04c, #d9a52b);
+  border: 2px solid #f7e04c;
+  box-shadow: 0 2px 0 #0b0a12;
+}
+.daily-go:hover { filter: brightness(1.12); }
+.daily-go:active { transform: translateY(2px); box-shadow: none; }
+
+/* ---- end-of-run result ---- */
+.res-score {
+  font-size: 26px;
+  color: var(--gold);
+  margin: 10px 0 4px;
+  text-shadow: 3px 3px 0 #7a1f2e;
+}
+.res-mods { font-size: 7px; color: var(--violet); margin: 6px 0 0; letter-spacing: 1px; }
+.res-stats { font-size: 8px; color: var(--dim); margin: 0; }
+.res-stats b { color: var(--text); }
+.res-daily { font-size: 7px; color: var(--gold); margin: 10px 0 0; }
+.res-daily.dim { color: var(--dim); }
+.share {
+  font-family: var(--pixel);
+  margin-top: 12px;
+  padding: 9px 16px;
+  font-size: 8px;
+  cursor: pointer;
+  color: var(--text);
+  background: linear-gradient(#3d445e, #24263a);
+  border: 2px solid var(--steel-lit);
+  box-shadow: inset 0 1px 0 #8f9ab8, 0 2px 0 #0b0a12;
+}
+.share:hover { filter: brightness(1.2); }
+
+/* ---- map picker on the menu ---- */
+.mapsel {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+
+.mapbtn {
+  font-family: var(--pixel);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 14px;
+  min-width: 148px;
+  cursor: pointer;
+  color: var(--text);
+  background: linear-gradient(#3d445e, #24263a);
+  border: 2px solid var(--steel-lit);
+  box-shadow: inset 0 1px 0 #8f9ab8, 0 2px 0 #0b0a12;
+}
+.mapbtn:hover { filter: brightness(1.2); }
+.mapbtn.active {
+  background: linear-gradient(#3f7fe0, #24509c);
+  border-color: var(--blue-lit);
+  color: #fff;
+}
+.mapbtn-name { font-size: 8px; letter-spacing: 1px; }
+.mapbtn-best { font-size: 6px; color: var(--dim); }
+.mapbtn.active .mapbtn-best { color: #cfe4ff; }
+
+.mapblurb {
+  margin: 0 0 14px;
+  font-size: 7px;
+  line-height: 1.9;
+  color: var(--dim);
+  text-align: center;
+}
+
+.help { text-align: left; }
+/* Mission briefing — set apart from the rules so it reads as fiction, not
+   instructions you have to memorise. */
+.help .briefing {
+  color: var(--blue-lit);
+  border-left: 2px solid var(--steel);
+  padding-left: 10px;
+  font-style: normal;
+}
+.help p { margin: 0 0 10px; font-size: 8px; line-height: 1.85; color: var(--dim); }
+.help p b { color: var(--text); }
+.help .keys {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--steel);
+  color: var(--blue-lit);
+  font-size: 7px;
+  line-height: 2;
+}
+
+#ov-btn {
+  margin-top: 14px;
+  font-size: 11px;
+  padding: 12px 22px;
+  background: linear-gradient(#3f7fe0, #24509c);
+  border-color: var(--blue-lit);
+  color: #fff;
+}
+
+/* ============================== DOCK ============================== */
+#dock {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+#build-bar {
+  flex: 1;
+  min-width: 320px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px;
+}
+
+/* One build button: hotkey pip, sprite icon, name, cost. */
+.bld {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 2px 6px;
+  min-height: 84px;
+}
+
+.bld-icon {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.bld-name { font-size: 6px; color: var(--text); text-align: center; line-height: 1.4; }
+.bld-cost { font-size: 9px; color: var(--gold); }
+
+.bld-hot {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  font-size: 6px;
+  color: var(--blue-lit);
+  opacity: 0.8;
+}
+
+.bld.active {
+  background: linear-gradient(#3f7fe0, #24509c);
+  border-color: var(--blue-lit);
+  animation: pulse 0.9s steps(2) infinite;
+}
+@keyframes pulse { 50% { filter: brightness(1.3); } }
+
+/* Taken off the table by a run modifier — struck through, not just dim, so
+   it doesn't read as "you can't afford this yet". */
+.bld.banned {
+  filter: grayscale(1) brightness(0.45);
+  cursor: not-allowed;
+  position: relative;
+}
+.bld.banned .bld-cost { color: var(--red); text-decoration: line-through; }
+
+/* Can't afford it — still clickable so you can read the tooltip. */
+.bld.broke { filter: grayscale(0.7) brightness(0.7); }
+.bld.broke .bld-cost { color: var(--red); }
+
+#side {
+  width: 290px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#sel-panel { padding: 8px 10px; flex: 1; }
+#sel-name { font-size: 8px; color: var(--gold); margin-bottom: 6px; letter-spacing: 0.5px; }
+#sel-stats { font-size: 7px; line-height: 1.9; color: var(--text); }
+#sel-stats .quip {
+  margin-top: 6px;
+  color: var(--gold-dim);
+  font-size: 6px;
+  line-height: 1.7;
+}
+#sel-stats b { color: var(--blue-lit); }
+#sel-stats .dim, .dim { color: var(--dim); }
+#sel-panel.empty #sel-name { color: var(--dim); }
+
+.sel-actions { display: flex; gap: 6px; margin-top: 8px; }
+.act { flex: 1; font-size: 7px; padding: 8px 4px; }
+.act.danger { border-color: #cf3b3b; background: linear-gradient(#7a1f2e, #4a121c); }
+.act.broke { filter: grayscale(0.7) brightness(0.7); }
+
+#send-wave {
+  font-size: 8px;
+  padding: 11px 8px;
+  background: linear-gradient(#f7e04c, #d9a52b);
+  border-color: #f7e04c;
+  color: #12101a;
+}
+#send-wave:disabled {
+  background: linear-gradient(#3d445e, #24263a);
+  border-color: var(--steel);
+  color: var(--dim);
+  cursor: default;
+  box-shadow: inset 0 1px 0 #5f6987;
+}
+
+#next-preview .air { color: var(--red); }
+
+#next-preview {
+  font-size: 6px;
+  color: var(--dim);
+  text-align: center;
+  letter-spacing: 1px;
+  padding: 4px;
+  background: rgba(18,16,26,0.5);
+  border: 1px solid var(--steel);
+}
+
+/* ============================ RESPONSIVE ============================
+   Below ~900px the dock stacks and the build bar wraps to two rows; the
+   canvas already scales itself to whatever integer factor fits. */
+@media (max-width: 900px) {
+  #dock { flex-direction: column; }
+  #side { width: 100%; }
+  #build-bar { grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; }
+  .logo { font-size: 13px; }
+  .stat { min-width: 84px; }
+  .stat-value { font-size: 11px; }
+}
+
+@media (max-width: 560px) {
+  #build-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #topbar { gap: 6px; padding: 6px 8px; }
+  #ov-title { font-size: 15px; }
+  .bld { min-height: 76px; }
+
+  /* The top bar was taking a quarter of a phone screen: four stat cards
+     wrapping to four rows, each with a subtitle. Drop the subtitles and let
+     the cards sit two-up — the map needs that height far more. */
+  .stat { min-width: 0; flex: 1 1 40%; padding: 3px 6px; }
+  .stat-sub { display: none; }
+  .stat-value { font-size: 10px; }
+  .stat-label { font-size: 5px; }
+  .brand { flex: 1 1 100%; }
+  .logo { font-size: 11px; }
+  .mapname { display: none; }
+  .ctl { padding: 6px 7px; }
+}
