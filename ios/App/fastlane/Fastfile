@@ -70,11 +70,42 @@ platform :ios do
     # default behavior (force: false) detects and reuses it instead of
     # creating a new one — which is what actually stops every run from
     # burning through Apple's certificate quota.
-    cert(
-      api_key: api_key,
-      keychain_path: keychain_path,
-      keychain_password: keychain_password,
-    )
+    begin
+      cert(
+        api_key: api_key,
+        keychain_path: keychain_path,
+        keychain_password: keychain_password,
+      )
+    rescue => e
+      # This only happens when cert couldn't find a matching private key
+      # in THIS keychain (cache miss/eviction) and then hit Apple's
+      # Distribution certificate quota trying to create a fresh one. By
+      # definition, every certificate already registered on the account
+      # is orphaned at that point — none of them have a usable private
+      # key anywhere, or cert would have found and reused one instead of
+      # failing. Safe to revoke all of them and retry once, using the
+      # same Admin-scoped API key already authenticated above, rather
+      # than requiring a human to do this by hand in the Apple Developer
+      # portal every time the GitHub Actions cache expires from disuse.
+      UI.important("cert failed (#{e.message}) — cleaning up orphaned Distribution certificates and retrying once.")
+
+      Spaceship::ConnectAPI::Certificate.all
+        .select { |c| c.certificate_type.to_s.include?("DISTRIBUTION") }
+        .each do |c|
+          begin
+            UI.message("Revoking orphaned certificate #{c.id} (#{c.display_name})")
+            c.delete!
+          rescue => delete_error
+            UI.important("Could not revoke certificate #{c.id}: #{delete_error.message}")
+          end
+        end
+
+      cert(
+        api_key: api_key,
+        keychain_path: keychain_path,
+        keychain_password: keychain_password,
+      )
+    end
 
     sigh(
       api_key: api_key,
