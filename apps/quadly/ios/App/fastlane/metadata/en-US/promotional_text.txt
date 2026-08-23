@@ -1,0 +1,1 @@
+Sixteen words hiding four groups of four. Find the connections before you run out of tries.

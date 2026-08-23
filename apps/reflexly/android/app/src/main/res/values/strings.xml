@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Reflexly</string>
+    <string name="title_activity_main">Reflexly</string>
+    <string name="package_name">com.Niloc.reflexly</string>
+    <string name="custom_url_scheme">com.Niloc.reflexly</string>
+</resources>

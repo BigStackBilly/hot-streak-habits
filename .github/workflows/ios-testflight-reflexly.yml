@@ -1,0 +1,52 @@
+name: iOS TestFlight (Reflexly)
+
+# Manual trigger only, same reasoning as the other apps' workflows — each
+# run costs macOS CI minutes and a TestFlight upload isn't something to
+# fire off automatically.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/reflexly
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install web dependencies
+        run: npm install
+
+      - name: Sync Capacitor web assets into the native project
+        run: npm run sync
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+          working-directory: apps/reflexly/ios/App
+
+      # Deliberately the SAME cache key as every sibling app's workflow
+      # (ios-ci-keychain-v1), not a per-app key — a Distribution
+      # certificate is a team-wide credential, not per-app, and Apple caps
+      # accounts at a small number of them.
+      - name: Cache CI keychain
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Keychains/ci_build-db
+          key: ios-ci-keychain-v1
+
+      - name: Build and upload to TestFlight
+        working-directory: apps/reflexly/ios/App
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CI_KEYCHAIN_PASSWORD: ${{ secrets.CI_KEYCHAIN_PASSWORD }}
+        run: bundle exec fastlane beta
