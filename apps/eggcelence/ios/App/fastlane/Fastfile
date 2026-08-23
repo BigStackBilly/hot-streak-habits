@@ -345,6 +345,9 @@ platform :ios do
       "com.Niloc.gridly"   => "Gridly",
       "com.Niloc.pitchly"  => "Pitchly",
       "com.Niloc.soonly"   => "Soonly",
+      "com.Niloc.quizzly"  => "Quizzly",
+      "com.Niloc.reflexly" => "Reflexly",
+      "com.Niloc.quadly"   => "Quadly",
     }
 
     wanted.each do |identifier, name|
